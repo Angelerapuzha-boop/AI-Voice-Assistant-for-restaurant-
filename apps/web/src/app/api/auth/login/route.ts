@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { authenticate, createSession } from "@meatbox/core";
+import { authenticate, createSession, env } from "@meatbox/core";
 import { db } from "@/lib/db";
 import { SESSION_COOKIE } from "@/lib/session";
 
@@ -34,9 +34,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   const session = await createSession(db(), user.id);
   const res = Response.json({ ok: true, role: user.role });
+  const secure = env.APP_URL.startsWith("https") ? "; Secure" : "";
   res.headers.append(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax; Expires=${session.expiresAt.toUTCString()}`,
+    `${SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${session.expiresAt.toUTCString()}`,
   );
   return res;
 }

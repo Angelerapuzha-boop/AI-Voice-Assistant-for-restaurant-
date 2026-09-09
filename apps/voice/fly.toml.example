@@ -1,0 +1,29 @@
+# Fly.io config for the voice service. Copy to fly.toml, set your app name,
+# then: fly launch --no-deploy && fly secrets set ... && fly deploy
+# Region syd = Sydney (closest to Perth callers via Twilio's AU edge).
+app = "meatbox-voice"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  VOICE_PORT = "8080"
+  HOST = "0.0.0.0"
+  SMS_MODE = "live"
+  # Set VOICE_PUBLIC_URL=https://meatbox-voice.fly.dev and
+  # VOICE_WEBSOCKET_URL=wss://meatbox-voice.fly.dev/twilio/relay
+  # plus all secrets with `fly secrets set` (never commit them).
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # calls must never hit a cold start
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "5s"
+  method = "GET"
+  path = "/health"

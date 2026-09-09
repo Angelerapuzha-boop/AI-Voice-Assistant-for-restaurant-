@@ -10,6 +10,7 @@
   "scripts": {
     "migrate": "tsx src/scripts/migrate.ts",
     "seed": "tsx src/scripts/seed.ts",
+    "demo-order": "tsx src/scripts/demo-order.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
