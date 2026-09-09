@@ -6,4 +6,8 @@ credentials-file: C:\Users\User(Admin)\.cloudflared\07df8d43-0ff6-490e-b891-1460
 ingress:
   - hostname: voice-syd.example.com
     service: http://127.0.0.1:4811
+  # Web app (public menu + staff kitchen/POS/admin behind login) for
+  # tablets and phones in the shop.
+  - hostname: app.example.com
+    service: http://127.0.0.1:4810
   - service: http_status:404

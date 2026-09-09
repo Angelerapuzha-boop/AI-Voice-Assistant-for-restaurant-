@@ -34,7 +34,11 @@ export async function POST(req: Request): Promise<Response> {
   }
   const session = await createSession(db(), user.id);
   const res = Response.json({ ok: true, role: user.role });
-  const secure = env.APP_URL.startsWith("https") ? "; Secure" : "";
+  // Secure cookie when the request actually came over HTTPS (tunnel),
+  // while plain-HTTP localhost access on the shop PC keeps working.
+  const proto =
+    req.headers.get("x-forwarded-proto") ?? (env.APP_URL.startsWith("https") ? "https" : "http");
+  const secure = proto === "https" ? "; Secure" : "";
   res.headers.append(
     "Set-Cookie",
     `${SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${session.expiresAt.toUTCString()}`,
