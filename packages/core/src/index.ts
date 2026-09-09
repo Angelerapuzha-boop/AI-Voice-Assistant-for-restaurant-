@@ -11,6 +11,7 @@ export * from "./domain/specials";
 export * from "./domain/settings";
 export * from "./domain/orders";
 export * from "./domain/notifications";
+export * from "./domain/webhooks";
 export * from "./domain/calls";
 export * from "./domain/audit";
 export * from "./domain/flow";

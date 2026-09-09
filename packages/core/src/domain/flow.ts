@@ -1,8 +1,10 @@
 import type pg from "pg";
 import { env } from "../env";
+import { formatCents } from "../money";
 import type { OrderWithItems, Restaurant, RestaurantSettings } from "../types";
 import { confirmOrder } from "./orders";
 import { customerSmsBody, enqueueNotification, ownerSmsBody } from "./notifications";
+import { enqueueWebhookEvent } from "./webhooks";
 
 /**
  * Confirm an order and, in the SAME transaction, enqueue the owner SMS
@@ -44,6 +46,19 @@ export async function confirmOrderWithNotifications(
           body: customerSmsBody(order, restaurant),
         });
       }
+      await enqueueWebhookEvent(tx, {
+        event: "order.confirmed",
+        orderId: order.id,
+        payload: {
+          orderNumber: order.publicOrderNumber,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          orderType: order.orderType,
+          pickup: order.requestedAsap ? "ASAP" : (order.requestedTime?.toISOString() ?? null),
+          total: formatCents(order.totalCents),
+          items: order.items.map((i) => ({ name: i.nameSnapshot, quantity: i.quantity })),
+        },
+      });
     },
   });
 }

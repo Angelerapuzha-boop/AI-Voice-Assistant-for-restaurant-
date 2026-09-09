@@ -3,6 +3,7 @@ import { env } from "../env";
 import { formatCents } from "../money";
 import { camelRow, camelRows, type OrderWithItems, type Restaurant } from "../types";
 import { describeOrderItems } from "./orders";
+import { createWebhookSender, enqueueWebhookEvent, type WebhookSender } from "./webhooks";
 
 /**
  * Notification outbox. Enqueue rows in the same transaction as the order
@@ -13,7 +14,7 @@ import { describeOrderItems } from "./orders";
 export interface NotificationAttempt {
   id: string;
   orderId: string | null;
-  kind: "owner_sms" | "customer_sms" | "review_sms";
+  kind: "owner_sms" | "customer_sms" | "review_sms" | "webhook";
   toNumber: string;
   body: string;
   status: "pending" | "sent" | "failed" | "gave_up";
@@ -149,6 +150,7 @@ export function createSmsSender(): SmsSender {
 export async function processPendingNotifications(
   db: Queryable,
   sender: SmsSender,
+  webhookSender: WebhookSender = createWebhookSender(),
 ): Promise<number> {
   const res = await db.query(
     `SELECT * FROM notification_attempts
@@ -160,7 +162,10 @@ export async function processPendingNotifications(
   const due = camelRows<NotificationAttempt>(res.rows);
   for (const attempt of due) {
     try {
-      const { sid } = await sender.send(attempt.toNumber, attempt.body);
+      const { sid } =
+        attempt.kind === "webhook"
+          ? await webhookSender.send(attempt.toNumber, attempt.body)
+          : await sender.send(attempt.toNumber, attempt.body);
       await db.query(
         `UPDATE notification_attempts
          SET status = 'sent', attempts = attempts + 1, sent_at = now(), provider_sid = $2
@@ -183,6 +188,24 @@ export async function processPendingNotifications(
         await db.query(`UPDATE orders SET owner_sms_alert = true, updated_at = now() WHERE id = $1`, [
           attempt.orderId,
         ]);
+        // Independent alert channel: tell n8n the app's own SMS path is failing.
+        const orderRes = await db.query(
+          `SELECT public_order_number, customer_name, total_cents FROM orders WHERE id = $1`,
+          [attempt.orderId],
+        );
+        const order = orderRes.rows[0] as
+          | { public_order_number: string | null; customer_name: string; total_cents: number }
+          | undefined;
+        await enqueueWebhookEvent(db, {
+          event: "owner_sms_failed",
+          orderId: attempt.orderId,
+          payload: {
+            orderNumber: order?.public_order_number ?? "",
+            customerName: order?.customer_name ?? "",
+            total: formatCents(order?.total_cents ?? 0),
+            lastError: String((err as Error).message).slice(0, 200),
+          },
+        });
       }
     }
   }

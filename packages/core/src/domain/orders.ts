@@ -15,6 +15,7 @@ import { getItem, getModifierGroups } from "./menu";
 import { priceLine, priceOrder } from "./pricing";
 import { getSpecial, isSpecialOrderable } from "./specials";
 import { auditLog } from "./audit";
+import { enqueueWebhookEvent } from "./webhooks";
 
 /** Validation failure whose message is safe to read to the caller. */
 export class OrderValidationError extends Error {
@@ -573,7 +574,19 @@ export async function markNeedsReview(
      WHERE id = $1 AND status = 'draft' RETURNING *`,
     [orderId, note],
   );
-  return res.rows[0] ? camelRow<Order>(res.rows[0]) : null;
+  if (!res.rows[0]) return null;
+  const order = camelRow<Order>(res.rows[0]);
+  await enqueueWebhookEvent(db, {
+    event: "order.needs_review",
+    orderId: order.id,
+    payload: {
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      total: formatCents(order.totalCents),
+      note,
+    },
+  });
+  return order;
 }
 
 const STATUS_FLOW: Record<string, OrderStatus[]> = {

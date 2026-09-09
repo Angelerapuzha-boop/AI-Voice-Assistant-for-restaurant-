@@ -29,6 +29,11 @@ const envSchema = z.object({
   OWNER_NOTIFICATION_PHONE: z.string().default(""),
   SMS_MODE: z.enum(["live", "log"]).default("log"),
 
+  // n8n event webhook (optional): order.confirmed / order.needs_review /
+  // owner_sms_failed events are POSTed here, HMAC-signed with the secret.
+  N8N_WEBHOOK_URL: z.string().default(""),
+  N8N_WEBHOOK_SECRET: z.string().default(""),
+
   APP_URL: z.string().default("http://127.0.0.1:4810"),
   VOICE_WEBSOCKET_URL: z.string().default("ws://127.0.0.1:4811/twilio/relay"),
   VOICE_PUBLIC_URL: z.string().default("http://127.0.0.1:4811"),

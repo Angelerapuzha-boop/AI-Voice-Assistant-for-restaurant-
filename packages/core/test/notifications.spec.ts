@@ -20,13 +20,20 @@ import {
 
 let ctx: TestContext;
 let db: pg.Pool;
+let savedWebhookUrl = "";
 
 beforeAll(async () => {
   ctx = await setupTestDb();
   db = ctx.db;
+  // This spec asserts exact SMS enqueue behaviour — keep n8n webhooks out.
+  const { env } = await import("../src/env");
+  savedWebhookUrl = env.N8N_WEBHOOK_URL;
+  (env as { N8N_WEBHOOK_URL: string }).N8N_WEBHOOK_URL = "";
 });
 
 afterAll(async () => {
+  const { env } = await import("../src/env");
+  (env as { N8N_WEBHOOK_URL: string }).N8N_WEBHOOK_URL = savedWebhookUrl;
   await db.end();
 });
 

@@ -1,0 +1,9 @@
+# Locally-managed Cloudflare tunnel for the Meatbox voice service.
+# Run: cloudflared tunnel --config "C:\ARC Digital_Assistant\meatbox-ai\infra\cloudflared\config.yml" run meatbox-voice
+tunnel: 07df8d43-0ff6-490e-b891-146053744baf
+credentials-file: C:\Users\User(Admin)\.cloudflared\07df8d43-0ff6-490e-b891-146053744baf.json
+
+ingress:
+  - hostname: voice-syd.example.com
+    service: http://127.0.0.1:4811
+  - service: http_status:404

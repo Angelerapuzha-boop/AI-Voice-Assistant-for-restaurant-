@@ -1,0 +1,206 @@
+{
+  "name": "Meatbox AI — order events + health monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meatbox-orders",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "wh-meatbox-orders",
+      "name": "Meatbox order events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 0],
+      "webhookId": "meatbox-orders"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Paste N8N_WEBHOOK_SECRET from meatbox-ai/.env between the quotes:\nconst SECRET = 'PASTE_N8N_WEBHOOK_SECRET_HERE';\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nif (!SECRET || SECRET === 'PASTE_N8N_WEBHOOK_SECRET_HERE') {\n  throw new Error('Set the Meatbox webhook secret in this Code node first.');\n}\nif ((headers['x-meatbox-token'] || '') !== SECRET) {\n  throw new Error('Invalid Meatbox token — sender secret does not match.');\n}\nreturn [{ json: item.json.body || {} }];"
+      },
+      "id": "code-verify",
+      "name": "Verify Meatbox token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-100, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c-needs-review",
+              "leftValue": "={{ $json.event }}",
+              "rightValue": "order.needs_review",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-needs-review",
+      "name": "Needs review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [120, 0]
+    },
+    {
+      "parameters": {
+        "from": "+61455500004",
+        "to": "+61455500001",
+        "message": "=⚠ MEATBOX: a call ended mid-order and NEEDS REVIEW. Caller: {{ $json.customerName || 'unknown' }} {{ $json.customerPhone || '' }} ({{ $json.total || '$0.00' }}). Note: {{ $json.note || '' }} — check the kitchen dashboard.",
+        "options": {}
+      },
+      "id": "sms-needs-review",
+      "name": "SMS: needs review",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [360, -120],
+      "credentials": { "twilioApi": { "id": "SELECT_ON_IMPORT", "name": "Twilio account" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c-sms-failed",
+              "leftValue": "={{ $json.event }}",
+              "rightValue": "owner_sms_failed",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-sms-failed",
+      "name": "Owner SMS failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [360, 100]
+    },
+    {
+      "parameters": {
+        "from": "+61455500004",
+        "to": "+61455500001",
+        "message": "=⚠ MEATBOX: order {{ $json.orderNumber }} ({{ $json.customerName }}, {{ $json.total }}) is on the dashboard but the app's own SMS to the owner KEPT FAILING ({{ $json.lastError }}). Open the kitchen dashboard now.",
+        "options": {}
+      },
+      "id": "sms-owner-sms-failed",
+      "name": "SMS: owner SMS failed",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [600, 0],
+      "credentials": { "twilioApi": { "id": "SELECT_ON_IMPORT", "name": "Twilio account" } }
+    },
+    {
+      "parameters": {},
+      "id": "noop-confirmed",
+      "name": "Order confirmed (app already SMSes owner — add Sheets/e-mail here if wanted)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [600, 220]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
+      },
+      "id": "sched-health",
+      "name": "Every 15 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-320, 420]
+    },
+    {
+      "parameters": {
+        "url": "https://voice-syd.example.com/health",
+        "options": { "timeout": 10000 }
+      },
+      "id": "http-health",
+      "name": "Check voice service health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-100, 420],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c-health-ok",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "false", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-health-bad",
+      "name": "Service down or unhealthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [120, 420]
+    },
+    {
+      "parameters": {
+        "from": "+61455500004",
+        "to": "+61455500001",
+        "message": "=⚠ MEATBOX VOICE SERVICE DOWN — https://voice-syd.example.com/health is failing or unhealthy. Callers may not be answered. ({{ $now.format('yyyy-LL-dd HH:mm') }})",
+        "options": {}
+      },
+      "id": "sms-down",
+      "name": "SMS: voice service down",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [360, 420],
+      "credentials": { "twilioApi": { "id": "SELECT_ON_IMPORT", "name": "Twilio account" } }
+    }
+  ],
+  "connections": {
+    "Meatbox order events": { "main": [[{ "node": "Verify Meatbox token", "type": "main", "index": 0 }]] },
+    "Verify Meatbox token": { "main": [[{ "node": "Needs review?", "type": "main", "index": 0 }]] },
+    "Needs review?": {
+      "main": [
+        [{ "node": "SMS: needs review", "type": "main", "index": 0 }],
+        [{ "node": "Owner SMS failed?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Owner SMS failed?": {
+      "main": [
+        [{ "node": "SMS: owner SMS failed", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Order confirmed (app already SMSes owner — add Sheets/e-mail here if wanted)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 min": { "main": [[{ "node": "Check voice service health", "type": "main", "index": 0 }]] },
+    "Check voice service health": { "main": [[{ "node": "Service down or unhealthy?", "type": "main", "index": 0 }]] },
+    "Service down or unhealthy?": { "main": [[{ "node": "SMS: voice service down", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
