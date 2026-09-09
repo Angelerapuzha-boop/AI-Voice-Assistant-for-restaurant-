@@ -34,6 +34,12 @@ const envSchema = z.object({
   N8N_WEBHOOK_URL: z.string().default(""),
   N8N_WEBHOOK_SECRET: z.string().default(""),
 
+  // Square integration (optional): create an app at developer.squareup.com,
+  // then the one-click Connect button in Admin > Integrations works.
+  SQUARE_APP_ID: z.string().default(""),
+  SQUARE_APP_SECRET: z.string().default(""),
+  SQUARE_ENV: z.enum(["sandbox", "production"]).default("production"),
+
   APP_URL: z.string().default("http://127.0.0.1:4810"),
   VOICE_WEBSOCKET_URL: z.string().default("ws://127.0.0.1:4811/twilio/relay"),
   VOICE_PUBLIC_URL: z.string().default("http://127.0.0.1:4811"),

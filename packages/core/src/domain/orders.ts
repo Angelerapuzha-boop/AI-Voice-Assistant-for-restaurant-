@@ -70,17 +70,19 @@ export async function createDraft(
     customerName?: string;
     orderType?: OrderType;
     callId?: string;
+    source?: "phone" | "pos" | "web";
   },
 ): Promise<Order> {
   const res = await db.query(
-    `INSERT INTO orders (restaurant_id, customer_phone, customer_name, order_type, call_id, status)
-     VALUES ($1, $2, $3, $4, $5, 'draft') RETURNING *`,
+    `INSERT INTO orders (restaurant_id, customer_phone, customer_name, order_type, call_id, status, source)
+     VALUES ($1, $2, $3, $4, $5, 'draft', $6) RETURNING *`,
     [
       params.restaurantId,
       params.customerPhone ?? "",
       params.customerName ?? "",
       params.orderType ?? "takeaway",
       params.callId ?? null,
+      params.source ?? "phone",
     ],
   );
   return camelRow<Order>(res.rows[0] as Record<string, unknown>);

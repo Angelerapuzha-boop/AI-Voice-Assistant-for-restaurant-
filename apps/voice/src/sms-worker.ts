@@ -1,5 +1,7 @@
 import {
   createSmsSender,
+  createSquareOrderSender,
+  createWebhookSender,
   getDb,
   processPendingNotifications,
   type SmsSender,
@@ -18,11 +20,13 @@ export function startSmsWorker(log: (msg: string) => void): { stop: () => void }
     log(`SMS worker disabled: ${(err as Error).message}`);
     return { stop: () => undefined };
   }
+  const webhookSender = createWebhookSender();
+  const squareSender = createSquareOrderSender(getDb());
   let running = false;
   const interval = setInterval(() => {
     if (running) return;
     running = true;
-    processPendingNotifications(getDb(), sender)
+    processPendingNotifications(getDb(), sender, webhookSender, squareSender)
       .catch((err: Error) => log(`SMS worker pass failed: ${err.message}`))
       .finally(() => {
         running = false;

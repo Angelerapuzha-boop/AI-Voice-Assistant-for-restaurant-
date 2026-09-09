@@ -154,7 +154,13 @@ export default function KitchenBoard() {
                   <p className="text-2xl font-extrabold">{order.publicOrderNumber ?? "—"}</p>
                   <p className="text-sm font-bold uppercase tracking-wide text-stone-500">
                     {order.orderType === "takeaway" ? "🥡 Takeaway" : "🍽 Dine-in"} ·{" "}
-                    {order.customerName || "No name"}
+                    {order.customerName || "No name"} ·{" "}
+                    {order.source === "pos" ? "🧾 Counter" : "📞 Phone"}
+                    {order.paymentMethod && (
+                      <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800">
+                        PAID {order.paymentMethod.toUpperCase()}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="text-right">

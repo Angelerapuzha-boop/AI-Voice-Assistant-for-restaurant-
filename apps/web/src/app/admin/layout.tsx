@@ -5,13 +5,15 @@ import LogoutButton from "./logout-button";
 
 const NAV = [
   { href: "/admin", label: "Dashboard" },
-  { href: "/kitchen", label: "Kitchen view" },
+  { href: "/pos", label: "🧾 POS / Cashier" },
+  { href: "/kitchen", label: "🍳 Kitchen view" },
   { href: "/admin/orders", label: "Orders" },
   { href: "/admin/menu", label: "Menu" },
   { href: "/admin/specials", label: "Daily specials" },
   { href: "/admin/hours", label: "Hours" },
   { href: "/admin/settings", label: "Settings" },
   { href: "/admin/voice", label: "Voice assistant" },
+  { href: "/admin/integrations", label: "Integrations" },
   { href: "/admin/simulator", label: "Test AI" },
   { href: "/admin/calls", label: "Call logs" },
   { href: "/admin/analytics", label: "Analytics" },

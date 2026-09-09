@@ -28,7 +28,12 @@ export default async function PublicMenuPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 pb-24">
       <header className="bg-stone-900 -mx-4 mb-6 px-6 py-10 text-center text-white">
-        <h1 className="text-4xl font-extrabold tracking-tight">MEATBOX WA</h1>
+        <h1 className="mb-wordmark text-4xl tracking-tight">
+          <span className="flame">🔥</span> MEATBOX <span className="flame">WA</span>
+        </h1>
+        <p className="mt-2 text-2xl tracking-widest" aria-hidden>
+          🍗 🌯 🍢 🫓 🍟
+        </p>
         <p className="mt-2 text-stone-300">
           Charcoal chicken · kebabs · grill — {restaurant.address}
         </p>

@@ -4,6 +4,7 @@ import { formatCents } from "../money";
 import { camelRow, camelRows, type OrderWithItems, type Restaurant } from "../types";
 import { describeOrderItems } from "./orders";
 import { createWebhookSender, enqueueWebhookEvent, type WebhookSender } from "./webhooks";
+import type { SquareOrderSender } from "./square";
 
 /**
  * Notification outbox. Enqueue rows in the same transaction as the order
@@ -14,7 +15,7 @@ import { createWebhookSender, enqueueWebhookEvent, type WebhookSender } from "./
 export interface NotificationAttempt {
   id: string;
   orderId: string | null;
-  kind: "owner_sms" | "customer_sms" | "review_sms" | "webhook";
+  kind: "owner_sms" | "customer_sms" | "review_sms" | "webhook" | "square_order";
   toNumber: string;
   body: string;
   status: "pending" | "sent" | "failed" | "gave_up";
@@ -151,6 +152,7 @@ export async function processPendingNotifications(
   db: Queryable,
   sender: SmsSender,
   webhookSender: WebhookSender = createWebhookSender(),
+  squareSender?: SquareOrderSender,
 ): Promise<number> {
   const res = await db.query(
     `SELECT * FROM notification_attempts
@@ -165,7 +167,11 @@ export async function processPendingNotifications(
       const { sid } =
         attempt.kind === "webhook"
           ? await webhookSender.send(attempt.toNumber, attempt.body)
-          : await sender.send(attempt.toNumber, attempt.body);
+          : attempt.kind === "square_order"
+            ? await (squareSender
+                ? squareSender.send(attempt.toNumber, attempt.body)
+                : Promise.reject(new Error("no Square sender configured")))
+            : await sender.send(attempt.toNumber, attempt.body);
       await db.query(
         `UPDATE notification_attempts
          SET status = 'sent', attempts = attempts + 1, sent_at = now(), provider_sid = $2

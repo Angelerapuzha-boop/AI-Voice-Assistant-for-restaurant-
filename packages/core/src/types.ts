@@ -139,6 +139,9 @@ export interface Order {
   callId: string | null;
   idempotencyKey: string | null;
   ownerSmsAlert: boolean;
+  source: "phone" | "pos" | "web";
+  paymentMethod: "" | "cash" | "card" | "tap";
+  paidAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
