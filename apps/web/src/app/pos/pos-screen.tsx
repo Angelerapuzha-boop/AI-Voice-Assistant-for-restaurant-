@@ -133,53 +133,62 @@ export default function PosScreen() {
   }
 
   return (
-    <main className="flex h-screen flex-col bg-stone-950 text-white">
-      {/* top bar */}
-      <header className="flex items-center gap-3 border-b border-stone-800 px-4 py-2">
-        <span className="text-xl font-extrabold tracking-wide">
+    <main className="flex h-screen bg-stone-950 text-white">
+      {/* left rail: logo, categories, recent orders, nav — opposite the checkout */}
+      <aside className="flex w-56 flex-none flex-col border-r border-stone-800 bg-stone-900">
+        <p className="px-4 pb-2 pt-4 text-xl font-extrabold tracking-wide">
           <span className="text-orange-500">🔥</span> MEATBOX
-        </span>
-        <div className="flex flex-1 items-center gap-2 overflow-x-auto px-2 text-xs">
-          {recent.map((o) => (
-            <span
-              key={o.id}
-              className={`whitespace-nowrap rounded-full px-2 py-1 ${
-                o.status === "new" ? "bg-red-600" : "bg-stone-800 text-stone-300"
+        </p>
+        <nav className="flex-1 space-y-1 overflow-y-auto px-2">
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setActiveCategory(c.id)}
+              className={`block w-full rounded-xl px-4 py-4 text-left text-base font-bold ${
+                activeCategory === c.id
+                  ? "bg-orange-600 text-white"
+                  : "text-stone-300 active:bg-stone-800"
               }`}
-              title={`${o.customerName} · ${dollars(o.totalCents)}`}
             >
-              {o.source === "pos" ? "🧾" : "📞"} {o.publicOrderNumber ?? "…"} ·{" "}
-              {o.status.replace("_", " ")}
-            </span>
+              {emoji(c.slug)} {c.name}
+            </button>
           ))}
+        </nav>
+        {recent.length > 0 && (
+          <div className="max-h-44 overflow-y-auto border-t border-stone-800 px-3 py-2">
+            <p className="pb-1 text-[10px] font-bold uppercase tracking-wider text-stone-500">
+              Recent orders
+            </p>
+            <ul className="space-y-1 text-xs">
+              {recent.map((o) => (
+                <li
+                  key={o.id}
+                  className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${
+                    o.status === "new" ? "bg-red-600" : "bg-stone-800 text-stone-300"
+                  }`}
+                  title={`${o.customerName} · ${dollars(o.totalCents)}`}
+                >
+                  <span>{o.source === "pos" ? "🧾" : "📞"}</span>
+                  <span className="font-bold">{o.publicOrderNumber ?? "…"}</span>
+                  <span className="ml-auto">{o.status.replace("_", " ")}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2 border-t border-stone-800 p-3">
+          <a href="/kitchen" className="rounded-lg bg-stone-800 py-3 text-center text-sm font-bold">
+            🍳 Kitchen
+          </a>
+          <a href="/admin" className="rounded-lg bg-stone-800 py-3 text-center text-sm font-bold">
+            Admin
+          </a>
         </div>
-        <a href="/kitchen" className="rounded-lg bg-stone-800 px-3 py-2 text-sm font-bold">
-          🍳 Kitchen
-        </a>
-        <a href="/admin" className="rounded-lg bg-stone-800 px-3 py-2 text-sm font-bold">
-          Admin
-        </a>
-      </header>
+      </aside>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* tiles */}
-        <section className="flex flex-1 flex-col overflow-hidden">
-          <nav className="flex gap-2 overflow-x-auto px-3 py-2">
-            {categories.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setActiveCategory(c.id)}
-                className={`whitespace-nowrap rounded-xl px-5 py-4 text-base font-bold ${
-                  activeCategory === c.id
-                    ? "bg-orange-600 text-white"
-                    : "bg-stone-800 text-stone-300 active:bg-stone-700"
-                }`}
-              >
-                {emoji(c.slug)} {c.name}
-              </button>
-            ))}
-          </nav>
-          <div className="grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto p-3 lg:grid-cols-3 2xl:grid-cols-4">
+      {/* tiles */}
+      <section className="flex flex-1 flex-col overflow-hidden">
+        <div className="grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto p-3 lg:grid-cols-3 2xl:grid-cols-4">
             {items
               .filter((i) => i.categoryId === activeCategory)
               .map((item) => {
@@ -311,7 +320,6 @@ export default function PosScreen() {
             CHARGE {dollars(total)}
           </button>
         </aside>
-      </div>
 
       {/* item options modal */}
       {configuring && (
