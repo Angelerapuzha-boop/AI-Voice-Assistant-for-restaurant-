@@ -192,6 +192,7 @@ function ItemRow({
   const [price, setPrice] = useState(dollars(item.priceCents));
   const [description, setDescription] = useState(item.description);
   const [aliases, setAliases] = useState(item.aliases.join(", "));
+  const [imageUrl, setImageUrl] = useState(item.imageUrl);
 
   async function patch(body: Record<string, unknown>) {
     if (await api(`/api/menu/items/${item.id}`, "PATCH", body)) void reload();
@@ -202,6 +203,10 @@ function ItemRow({
   return (
     <li className="py-3">
       <div className="flex flex-wrap items-center gap-3">
+        {item.imageUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={item.imageUrl} alt="" className="h-10 w-10 rounded-lg object-cover" />
+        )}
         <button onClick={toggleOpen} className="flex-1 text-left">
           <span className="font-semibold">{item.name}</span>
           {item.isVegetarian && <span className="ml-2 text-xs text-green-700">V</span>}
@@ -250,6 +255,17 @@ function ItemRow({
               />
             </label>
           </div>
+          <label className="mt-3 block text-sm">
+            Photo URL (shown on the website and POS; /menu/… for bundled photos)
+            <input
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              onBlur={() => {
+                if (imageUrl !== item.imageUrl) void patch({ imageUrl });
+              }}
+              className="mt-1 w-full rounded-lg border border-stone-300 p-2"
+            />
+          </label>
           <label className="mt-3 block text-sm">
             Description (the AI reads this to callers)
             <textarea

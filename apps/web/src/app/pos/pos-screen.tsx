@@ -189,15 +189,30 @@ export default function PosScreen() {
                     key={item.id}
                     onClick={() => tapItem(item)}
                     disabled={off}
-                    className={`flex min-h-28 flex-col items-start justify-between rounded-2xl p-3 text-left shadow-lg transition ${
-                      off
-                        ? "bg-stone-900 text-stone-600"
-                        : "bg-stone-800 hover:bg-stone-700 active:scale-95"
+                    className={`relative flex min-h-36 flex-col justify-end overflow-hidden rounded-2xl p-3 text-left shadow-lg transition ${
+                      off ? "bg-stone-900 text-stone-500" : "bg-stone-800 hover:ring-2 hover:ring-orange-500 active:scale-95"
                     }`}
                   >
-                    <span className="text-3xl">{emoji(activeSlug)}</span>
-                    <span className="mt-1 text-sm font-bold leading-tight">{item.name}</span>
-                    <span className={`text-sm font-extrabold ${off ? "" : "text-orange-400"}`}>
+                    {item.imageUrl ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={item.imageUrl}
+                          alt=""
+                          loading="lazy"
+                          className={`absolute inset-0 h-full w-full object-cover ${off ? "opacity-20 grayscale" : "opacity-80"}`}
+                        />
+                        <span className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 to-transparent" />
+                      </>
+                    ) : (
+                      <span className="absolute left-3 top-3 text-3xl">{emoji(activeSlug)}</span>
+                    )}
+                    <span className="relative text-sm font-bold leading-tight drop-shadow">
+                      {item.name}
+                    </span>
+                    <span
+                      className={`relative text-sm font-extrabold drop-shadow ${off ? "text-red-400" : "text-orange-400"}`}
+                    >
                       {off ? "SOLD OUT" : dollars(item.priceCents)}
                     </span>
                   </button>

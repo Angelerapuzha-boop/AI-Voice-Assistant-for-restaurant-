@@ -82,8 +82,17 @@ export default async function PublicMenuPage() {
             </h2>
             <ul className="space-y-3">
               {catItems.map((item) => (
-                <li key={item.id} className="flex items-baseline justify-between gap-4">
-                  <div>
+                <li key={item.id} className="flex items-center justify-between gap-4">
+                  {item.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={item.imageUrl}
+                      alt={item.name}
+                      loading="lazy"
+                      className={`h-16 w-16 flex-none rounded-xl object-cover shadow ${item.isSoldOut || !item.isAvailable ? "opacity-40 grayscale" : ""}`}
+                    />
+                  )}
+                  <div className="flex-1">
                     <p className="font-semibold">
                       {item.name}
                       {item.isVegetarian && (
