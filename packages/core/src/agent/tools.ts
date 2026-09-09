@@ -510,32 +510,40 @@ async function executeToolInner(
       const order = await requireDraft(ctx, state);
       let requestedAsap: boolean | undefined;
       let requestedTime: Date | null | undefined;
+      let timeError: string | undefined;
       if (input.pickupTime !== undefined) {
         const raw = String(input.pickupTime).trim();
         if (/^asap$/i.test(raw)) {
-          requestedAsap = true;
-          requestedTime = null;
           const openNow = openStateAt(hours, now, restaurant.timezone).open;
-          if (!openNow) {
-            return { error: "The kitchen is closed right now, so ASAP isn't possible. Ask for a time when the kitchen is open." };
+          if (openNow) {
+            requestedAsap = true;
+            requestedTime = null;
+          } else {
+            timeError =
+              "The kitchen is closed right now, so ASAP isn't possible. Ask for a time when the kitchen is open.";
           }
         } else {
           const parsed = new Date(raw);
           if (Number.isNaN(parsed.getTime())) {
-            return { error: "Couldn't parse that pickup time. Pass ISO 8601 like 2026-09-09T19:20:00+08:00 or 'ASAP'." };
+            timeError =
+              "Couldn't parse that pickup time. Pass ISO 8601 like 2026-09-09T19:20:00+08:00 or 'ASAP'.";
+          } else {
+            const check = validateRequestedTime({
+              rows: hours,
+              timezone: restaurant.timezone,
+              now,
+              requested: parsed,
+              minPrepMinutes: settings.minPrepMinutes,
+              maxFutureHours: settings.maxFutureHours,
+              futureOrdersEnabled: settings.futureOrdersEnabled,
+            });
+            if (check.ok) {
+              requestedAsap = false;
+              requestedTime = parsed;
+            } else {
+              timeError = check.reason;
+            }
           }
-          const check = validateRequestedTime({
-            rows: hours,
-            timezone: restaurant.timezone,
-            now,
-            requested: parsed,
-            minPrepMinutes: settings.minPrepMinutes,
-            maxFutureHours: settings.maxFutureHours,
-            futureOrdersEnabled: settings.futureOrdersEnabled,
-          });
-          if (!check.ok) return { error: check.reason };
-          requestedAsap = false;
-          requestedTime = parsed;
         }
       }
       const updated = await setOrderDetails(db, {
@@ -553,7 +561,8 @@ async function executeToolInner(
       });
       state.mutationSeq++;
       return {
-        ok: true,
+        ok: !timeError,
+        ...(timeError ? { error: `${timeError} (other details were saved)` } : {}),
         customerName: updated.customerName || null,
         orderType: updated.orderType,
         pickup: updated.requestedAsap ? "ASAP" : (updated.requestedTime?.toISOString() ?? null),
@@ -569,6 +578,14 @@ async function executeToolInner(
 
     case "confirm_order": {
       const order = await requireDraft(ctx, state);
+      // Closed kitchen + "ASAP" can never be confirmed (spec: no immediate
+      // orders while closed) — a valid future pickup time is required.
+      if (order.requestedAsap && !openStateAt(hours, now, restaurant.timezone).open) {
+        return {
+          error:
+            "The kitchen is closed right now so an ASAP order can't be confirmed. Set a pickup time when the kitchen is open (set_order_details), then confirm.",
+        };
+      }
       if (state.summarySeq < state.mutationSeq) {
         return {
           error:

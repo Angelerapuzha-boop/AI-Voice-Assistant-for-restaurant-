@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+:root {
+  --mb-charcoal: #1c1917;
+  --mb-flame: #ea580c;
+}
+
+body {
+  @apply bg-stone-100 text-stone-900 antialiased;
+}
