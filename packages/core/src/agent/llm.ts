@@ -56,8 +56,15 @@ export function createAnthropicLlm(model?: string): Llm {
 
       // Track tool_use blocks so we can emit them complete.
       const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+      let inputTokens = 0;
+      let outputTokens = 0;
 
       for await (const event of stream) {
+        if (event.type === "message_start") {
+          inputTokens = event.message.usage.input_tokens;
+        } else if (event.type === "message_delta" && event.usage) {
+          outputTokens = event.usage.output_tokens;
+        }
         if (event.type === "content_block_start") {
           if (event.content_block.type === "tool_use") {
             toolBlocks.set(event.index, {
@@ -91,6 +98,9 @@ export function createAnthropicLlm(model?: string): Llm {
           }
         }
       }
+      // One line per model round-trip so real per-call cost can be read
+      // from the service logs (input/output token counts).
+      console.log(`[llm-usage] model=${useModel} input=${inputTokens} output=${outputTokens}`);
     },
   };
 }

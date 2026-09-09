@@ -43,7 +43,7 @@ function agentCtx(): AgentContext {
 }
 
 describe("agent engine + tools", () => {
-  it("full ordering flow with the summary-before-confirm guard (scenarios 1 & 7)", async () => {
+  it("full ordering flow: mutations carry current state, one read-back, confirm (scenarios 1 & 7)", async () => {
     const item = await findItemByName(db, "Chicken Meatbox");
     const base = await modifierId(db, "Chicken Meatbox", "Chips & Salad");
 
@@ -52,16 +52,15 @@ describe("agent engine + tools", () => {
       toolTurn("create_order_draft", { orderType: "takeaway" }, "tu_1"),
       toolTurn("add_order_item", { menuItemId: item.id, quantity: 1, modifierIds: [base] }, "tu_2"),
       textTurn("One chicken Meatbox with chips and salad. Can I grab a name?"),
-      // turn 2: name + attempt to confirm WITHOUT summary -> guard error -> summary -> confirm
+      // turn 2: details set; the tool response carries the full cart, so the
+      // model reads the order back from it without a separate summary call
       toolTurn("set_order_details", { customerName: "Daniel", pickupTime: "ASAP" }, "tu_3"),
-      toolTurn("confirm_order", {}, "tu_4"), // must be rejected by the guard
-      toolTurn("get_order_summary", {}, "tu_5"),
-      textTurn("So that's one chicken Meatbox, $19.95 total. All good?"),
-      // turn 3: caller says yes -> confirm -> goodbye + end_call in one turn
-      toolTurn("confirm_order", {}, "tu_6"),
+      textTurn("So that's one chicken Meatbox, $19.95 total, takeaway ASAP for Daniel. All good?"),
+      // turn 3: caller says yes -> confirm succeeds on the FIRST yes
+      toolTurn("confirm_order", {}, "tu_4"),
       [
         { type: "text" as const, text: "Perfect, we've got your order. Thanks for calling Meatbox!" },
-        { type: "tool_use" as const, id: "tu_7", name: "end_call", input: { reason: "done" } },
+        { type: "tool_use" as const, id: "tu_5", name: "end_call", input: { reason: "done" } },
         { type: "stop" as const, reason: "tool_use" },
       ],
     ]);
@@ -73,11 +72,12 @@ describe("agent engine + tools", () => {
     expect(turn1.toolCalls[1]!.result.total).toBe("$19.95");
 
     const turn2 = await agent.handleTurn("Daniel, pickup ASAP");
-    const confirmAttempt = turn2.toolCalls.find((c) => c.name === "confirm_order");
-    expect(confirmAttempt!.result.error).toMatch(/read it back|get_order_summary/i);
+    const details = turn2.toolCalls.find((c) => c.name === "set_order_details");
+    expect(details!.result.total).toBe("$19.95"); // full cart in the response
 
     const turn3 = await agent.handleTurn("Yes that's right");
     const confirm = turn3.toolCalls.find((c) => c.name === "confirm_order");
+    expect(confirm!.result.error).toBeUndefined(); // no double-confirm loop
     expect(confirm!.result.confirmed).toBe(true);
     expect(String(confirm!.result.orderNumber)).toMatch(/^MB\d+$/);
     expect(turn3.endCall).toBe(true);

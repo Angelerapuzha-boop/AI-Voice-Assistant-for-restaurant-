@@ -481,6 +481,9 @@ async function executeToolInner(
         specialInstructions: input.specialInstructions ? String(input.specialInstructions) : undefined,
       });
       state.mutationSeq++;
+      // The full cart + totals are in this response, so the model now holds
+      // the current state — that satisfies the stale-state confirm guard.
+      state.summarySeq = state.mutationSeq;
       return orderPublic(updated);
     }
 
@@ -496,6 +499,7 @@ async function executeToolInner(
           input.specialInstructions !== undefined ? String(input.specialInstructions) : undefined,
       });
       state.mutationSeq++;
+      state.summarySeq = state.mutationSeq;
       return orderPublic(updated);
     }
 
@@ -503,6 +507,7 @@ async function executeToolInner(
       const order = await requireDraft(ctx, state);
       const updated = await removeOrderItem(db, order.id, String(input.orderItemId ?? ""));
       state.mutationSeq++;
+      state.summarySeq = state.mutationSeq;
       return orderPublic(updated);
     }
 
@@ -560,12 +565,12 @@ async function executeToolInner(
         allergyNotes: input.allergyNotes !== undefined ? String(input.allergyNotes) : undefined,
       });
       state.mutationSeq++;
+      state.summarySeq = state.mutationSeq;
+      const withItems = await getOrderWithItems(db, updated.id);
       return {
         ok: !timeError,
         ...(timeError ? { error: `${timeError} (other details were saved)` } : {}),
-        customerName: updated.customerName || null,
-        orderType: updated.orderType,
-        pickup: updated.requestedAsap ? "ASAP" : (updated.requestedTime?.toISOString() ?? null),
+        ...(withItems ? orderPublic(withItems) : {}),
       };
     }
 
