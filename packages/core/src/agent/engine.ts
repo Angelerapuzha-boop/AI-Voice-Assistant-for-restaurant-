@@ -37,6 +37,7 @@ const MAX_TOOL_ITERATIONS = 10;
 export class OrderAgent {
   readonly state: AgentState;
   private readonly messages: LlmMessage[] = [];
+  private readonly system: string;
   private consecutiveFailures = 0;
 
   constructor(
@@ -44,6 +45,16 @@ export class OrderAgent {
     private readonly ctx: AgentContext,
   ) {
     this.state = initialAgentState();
+    // Built once per call: a stable system prompt keeps the prompt cache
+    // valid across every turn and tool round-trip of the conversation.
+    // (Live open/closed state always comes from tools, not this snapshot.)
+    this.system = buildSystemPrompt({
+      restaurant: ctx.restaurant,
+      settings: ctx.settings,
+      hours: ctx.hours,
+      callerNumber: ctx.callerNumber,
+      now: ctx.now(),
+    });
   }
 
   get history(): readonly LlmMessage[] {
@@ -55,13 +66,7 @@ export class OrderAgent {
     handlers: TurnHandlers = {},
     signal?: AbortSignal,
   ): Promise<AgentTurnResult> {
-    const system = buildSystemPrompt({
-      restaurant: this.ctx.restaurant,
-      settings: this.ctx.settings,
-      hours: this.ctx.hours,
-      callerNumber: this.ctx.callerNumber,
-      now: this.ctx.now(),
-    });
+    const system = this.system;
 
     this.messages.push({ role: "user", content: userText });
 
