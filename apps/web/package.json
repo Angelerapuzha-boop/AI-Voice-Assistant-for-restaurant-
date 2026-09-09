@@ -1,0 +1,26 @@
+{
+  "name": "@meatbox/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 4810",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 4810",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"web: covered by typecheck + e2e via voice tests\""
+  },
+  "dependencies": {
+    "@meatbox/core": "workspace:*",
+    "next": "^15.5.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.12",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "tailwindcss": "^4.1.12",
+    "typescript": "^5.9.2"
+  }
+}

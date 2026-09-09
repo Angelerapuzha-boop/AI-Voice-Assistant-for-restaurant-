@@ -1,0 +1,26 @@
+{
+  "name": "meatbox-ai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Meatbox WA — AI telephone ordering system (Twilio ConversationRelay + Claude + PostgreSQL)",
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d postgres --wait",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @meatbox/core run migrate",
+    "db:seed": "pnpm --filter @meatbox/core run seed",
+    "dev:web": "pnpm --filter @meatbox/web run dev",
+    "dev:voice": "pnpm --filter @meatbox/voice run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  }
+}

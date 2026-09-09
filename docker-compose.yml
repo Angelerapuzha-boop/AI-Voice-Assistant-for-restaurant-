@@ -1,0 +1,25 @@
+# Local development infrastructure only. All ports bind to loopback.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meatbox-postgres
+    # A Docker engine bounce must never take the database down permanently
+    # (lesson learned on this machine, 2026-08-13, arc-restaurant-ai).
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5441:5432"
+    environment:
+      POSTGRES_USER: meatbox
+      POSTGRES_PASSWORD: meatbox_dev_password
+      POSTGRES_DB: meatbox
+    volumes:
+      - meatbox_pgdata:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meatbox -d meatbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  meatbox_pgdata:
