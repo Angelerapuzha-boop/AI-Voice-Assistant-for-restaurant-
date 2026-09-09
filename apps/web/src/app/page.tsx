@@ -27,16 +27,23 @@ export default async function PublicMenuPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 pb-24">
-      <header className="bg-stone-900 -mx-4 mb-6 px-6 py-10 text-center text-white">
-        <h1 className="mb-wordmark text-4xl tracking-tight">
-          <span className="flame">🔥</span> MEATBOX <span className="flame">WA</span>
-        </h1>
-        <p className="mt-2 text-2xl tracking-widest" aria-hidden>
-          🍗 🌯 🍢 🫓 🍟
-        </p>
-        <p className="mt-2 text-stone-300">
-          Charcoal chicken · kebabs · grill — {restaurant.address}
-        </p>
+      <header className="relative -mx-4 mb-6 overflow-hidden bg-stone-900 px-6 py-10 text-center text-white">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/hero-kebab.jpg"
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover opacity-30"
+        />
+        <div className="relative">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/logo.jpg"
+            alt="Meatbox — Kebab. Char & Grill"
+            className="mx-auto w-72 max-w-full rounded-2xl shadow-2xl"
+          />
+          <p className="mt-4 text-stone-200">
+            Charcoal chicken · kebabs · grill — {restaurant.address}
+          </p>
         <p className="mt-2 text-sm">
           <span
             className={`inline-block rounded-full px-3 py-1 font-semibold ${state.open ? "bg-green-600" : "bg-stone-600"}`}
@@ -53,6 +60,7 @@ export default async function PublicMenuPage() {
         <p className="mt-3 text-xs text-stone-400">
           Our AI assistant answers, takes your order and the kitchen starts straight away.
         </p>
+        </div>
       </header>
 
       {specials.length > 0 && (

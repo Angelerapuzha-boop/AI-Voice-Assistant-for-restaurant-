@@ -32,7 +32,8 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl bg-white p-8 shadow">
-        <h1 className="mb-1 text-2xl font-bold text-stone-900">Meatbox WA</h1>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/logo.jpg" alt="Meatbox" className="mb-4 w-full rounded-xl" />
         <p className="mb-6 text-sm text-stone-500">Staff sign in</p>
         <label className="mb-1 block text-sm font-medium">Email</label>
         <input

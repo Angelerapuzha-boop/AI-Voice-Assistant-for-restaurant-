@@ -136,9 +136,8 @@ export default function PosScreen() {
     <main className="flex h-screen bg-stone-950 text-white">
       {/* left rail: logo, categories, recent orders, nav — opposite the checkout */}
       <aside className="flex w-56 flex-none flex-col border-r border-stone-800 bg-stone-900">
-        <p className="px-4 pb-2 pt-4 text-xl font-extrabold tracking-wide">
-          <span className="text-orange-500">🔥</span> MEATBOX
-        </p>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/logo.jpg" alt="Meatbox — Kebab. Char & Grill" className="mx-3 mb-1 mt-3 rounded-xl" />
         <nav className="flex-1 space-y-1 overflow-y-auto px-2">
           {categories.map((c) => (
             <button
@@ -188,7 +187,7 @@ export default function PosScreen() {
 
       {/* tiles */}
       <section className="flex flex-1 flex-col overflow-hidden">
-        <div className="grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto p-3 lg:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid flex-1 auto-rows-fr grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3 overflow-y-auto p-3">
             {items
               .filter((i) => i.categoryId === activeCategory)
               .map((item) => {
@@ -198,7 +197,7 @@ export default function PosScreen() {
                     key={item.id}
                     onClick={() => tapItem(item)}
                     disabled={off}
-                    className={`relative flex aspect-[4/3] min-h-44 flex-col justify-end overflow-hidden rounded-2xl p-4 text-left shadow-lg transition ${
+                    className={`relative flex h-full min-h-44 flex-col justify-end overflow-hidden rounded-2xl p-4 text-left shadow-lg transition ${
                       off ? "bg-stone-900 text-stone-500" : "bg-stone-800 active:scale-95 active:ring-4 active:ring-orange-500"
                     }`}
                   >
