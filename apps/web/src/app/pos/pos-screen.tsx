@@ -136,8 +136,8 @@ export default function PosScreen() {
     <main className="flex h-screen flex-col bg-stone-950 text-white">
       {/* top bar */}
       <header className="flex items-center gap-3 border-b border-stone-800 px-4 py-2">
-        <span className="text-lg font-extrabold tracking-wide">
-          🔥 MEATBOX <span className="text-orange-500">POS</span>
+        <span className="text-xl font-extrabold tracking-wide">
+          <span className="text-orange-500">🔥</span> MEATBOX
         </span>
         <div className="flex flex-1 items-center gap-2 overflow-x-auto px-2 text-xs">
           {recent.map((o) => (
@@ -169,17 +169,17 @@ export default function PosScreen() {
               <button
                 key={c.id}
                 onClick={() => setActiveCategory(c.id)}
-                className={`whitespace-nowrap rounded-xl px-4 py-3 text-sm font-bold ${
+                className={`whitespace-nowrap rounded-xl px-5 py-4 text-base font-bold ${
                   activeCategory === c.id
                     ? "bg-orange-600 text-white"
-                    : "bg-stone-800 text-stone-300 hover:bg-stone-700"
+                    : "bg-stone-800 text-stone-300 active:bg-stone-700"
                 }`}
               >
                 {emoji(c.slug)} {c.name}
               </button>
             ))}
           </nav>
-          <div className="grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto p-3 sm:grid-cols-3 xl:grid-cols-4">
+          <div className="grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto p-3 lg:grid-cols-3 2xl:grid-cols-4">
             {items
               .filter((i) => i.categoryId === activeCategory)
               .map((item) => {
@@ -189,8 +189,8 @@ export default function PosScreen() {
                     key={item.id}
                     onClick={() => tapItem(item)}
                     disabled={off}
-                    className={`relative flex min-h-36 flex-col justify-end overflow-hidden rounded-2xl p-3 text-left shadow-lg transition ${
-                      off ? "bg-stone-900 text-stone-500" : "bg-stone-800 hover:ring-2 hover:ring-orange-500 active:scale-95"
+                    className={`relative flex aspect-[4/3] min-h-44 flex-col justify-end overflow-hidden rounded-2xl p-4 text-left shadow-lg transition ${
+                      off ? "bg-stone-900 text-stone-500" : "bg-stone-800 active:scale-95 active:ring-4 active:ring-orange-500"
                     }`}
                   >
                     {item.imageUrl ? (
@@ -200,18 +200,18 @@ export default function PosScreen() {
                           src={item.imageUrl}
                           alt=""
                           loading="lazy"
-                          className={`absolute inset-0 h-full w-full object-cover ${off ? "opacity-20 grayscale" : "opacity-80"}`}
+                          className={`absolute inset-0 h-full w-full object-cover ${off ? "opacity-20 grayscale" : ""}`}
                         />
-                        <span className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 to-transparent" />
+                        <span className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/95 via-black/60 to-transparent" />
                       </>
                     ) : (
-                      <span className="absolute left-3 top-3 text-3xl">{emoji(activeSlug)}</span>
+                      <span className="absolute left-4 top-4 text-4xl">{emoji(activeSlug)}</span>
                     )}
-                    <span className="relative text-sm font-bold leading-tight drop-shadow">
+                    <span className="relative text-base font-bold leading-tight drop-shadow">
                       {item.name}
                     </span>
                     <span
-                      className={`relative text-sm font-extrabold drop-shadow ${off ? "text-red-400" : "text-orange-400"}`}
+                      className={`relative text-lg font-extrabold drop-shadow ${off ? "text-red-400" : "text-orange-400"}`}
                     >
                       {off ? "SOLD OUT" : dollars(item.priceCents)}
                     </span>
@@ -275,11 +275,11 @@ export default function PosScreen() {
                           .filter((l) => l.quantity > 0),
                       )
                     }
-                    className="h-8 w-8 rounded-lg bg-stone-700 font-extrabold"
+                    className="h-11 w-11 rounded-lg bg-stone-700 text-lg font-extrabold"
                   >
                     −
                   </button>
-                  <span className="w-6 text-center font-bold">{line.quantity}</span>
+                  <span className="w-7 text-center text-lg font-bold">{line.quantity}</span>
                   <button
                     onClick={() =>
                       setCart((prev) =>
@@ -288,7 +288,7 @@ export default function PosScreen() {
                         ),
                       )
                     }
-                    className="h-8 w-8 rounded-lg bg-stone-700 font-extrabold"
+                    className="h-11 w-11 rounded-lg bg-stone-700 text-lg font-extrabold"
                   >
                     +
                   </button>
@@ -452,10 +452,10 @@ function ItemModal({
                   <button
                     key={mod.id}
                     onClick={() => toggle(group, mod.id)}
-                    className={`rounded-xl px-3 py-2 text-sm font-semibold ${
+                    className={`rounded-xl px-4 py-3 text-base font-semibold ${
                       selected.includes(mod.id)
                         ? "bg-orange-600"
-                        : "bg-stone-800 text-stone-300 hover:bg-stone-700"
+                        : "bg-stone-800 text-stone-300 active:bg-stone-700"
                     }`}
                   >
                     {mod.name}
