@@ -189,7 +189,7 @@ export class RelaySession {
       this.pendingText = "";
       this.pendingTimer = null;
       if (merged) this.enqueueTurn(merged);
-    }, 600);
+    }, 400);
   }
 
   /** Serialise turns — a new final prompt aborts a stale in-flight turn. */
@@ -220,7 +220,7 @@ export class RelaySession {
         fillerSent = true;
         this.send({ type: "text", token: "Righto, ", last: false });
       }
-    }, 2000);
+    }, 1500);
     const result = await this.agent.handleTurn(
       text,
       {

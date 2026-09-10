@@ -40,7 +40,9 @@ export function conversationRelayTwiml(params: {
   const attrs: Record<string, string> = {
     url: wsUrl,
     welcomeGreeting: settings.aiGreeting,
-    welcomeGreetingInterruptible: "speech",
+    // "none": pickup noise must never cancel the greeting — callers were
+    // getting silence and saying "Hello?" (2026-09-10).
+    welcomeGreetingInterruptible: "none",
     language,
     ttsLanguage: language,
     transcriptionLanguage: language,
