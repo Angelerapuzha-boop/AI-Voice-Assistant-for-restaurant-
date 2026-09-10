@@ -25,12 +25,16 @@ function ageMinutes(iso: string): number {
 }
 
 function pickupLabel(order: Order): string {
-  if (order.requestedAsap || !order.requestedTime) return "ASAP";
-  return new Date(order.requestedTime).toLocaleTimeString("en-AU", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "Australia/Perth",
-  });
+  const target = order.currentEstimatedReadyAt ?? (order.requestedAsap ? null : order.requestedTime);
+  if (!target) return "ASAP";
+  return (
+    "~" +
+    new Date(target).toLocaleTimeString("en-AU", {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: "Australia/Perth",
+    })
+  );
 }
 
 export default function KitchenBoard() {

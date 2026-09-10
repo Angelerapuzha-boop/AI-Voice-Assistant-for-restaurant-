@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { updateOrderStatus, OrderValidationError, type OrderStatus } from "@meatbox/core";
+import {
+  enqueueNotification,
+  getDefaultRestaurant,
+  getSettings,
+  isUsablePhone,
+  updateOrderStatus,
+  OrderValidationError,
+  type OrderStatus,
+} from "@meatbox/core";
 import { db } from "@/lib/db";
 import { guarded, requireUser } from "@/lib/session";
 
@@ -14,6 +22,20 @@ export const POST = guarded(async (req: Request, ctx: { params: Promise<{ id: st
   if (!parsed.success) return Response.json({ error: "invalid status" }, { status: 400 });
   try {
     const order = await updateOrderStatus(db(), id, parsed.data.status as OrderStatus, user.email);
+    // Ready notification (deduplicated: only on the transition into READY,
+    // which the status flow permits at most once per order).
+    if (parsed.data.status === "ready" && order.source === "phone" && isUsablePhone(order.customerPhone)) {
+      const restaurant = await getDefaultRestaurant(db());
+      const settings = await getSettings(db(), restaurant.id);
+      if (settings.customerSmsEnabled) {
+        await enqueueNotification(db(), {
+          orderId: order.id,
+          kind: "customer_sms",
+          toNumber: order.customerPhone,
+          body: `Your ${restaurant.name} order #${order.publicOrderNumber} is ready for collection.`,
+        });
+      }
+    }
     return Response.json({ order });
   } catch (err) {
     if (err instanceof OrderValidationError) {

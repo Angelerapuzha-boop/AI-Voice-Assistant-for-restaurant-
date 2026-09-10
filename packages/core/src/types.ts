@@ -28,6 +28,9 @@ export interface Restaurant {
 
 export interface RestaurantSettings {
   restaurantId: string;
+  kitchenCapacity: number;
+  simpleBaselineSeconds: number;
+  complexBaselineSeconds: number;
   ownerSmsNumber: string;
   customerSmsEnabled: boolean;
   futureOrdersEnabled: boolean;
@@ -142,6 +145,9 @@ export interface Order {
   source: "phone" | "pos" | "web";
   paymentMethod: "" | "cash" | "card" | "tap";
   paidAt: Date | null;
+  customerId: string | null;
+  firstPromisedReadyAt: Date | null;
+  currentEstimatedReadyAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

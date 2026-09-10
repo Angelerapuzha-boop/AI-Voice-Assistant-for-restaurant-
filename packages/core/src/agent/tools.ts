@@ -23,6 +23,9 @@ import {
 } from "../domain/orders";
 import { confirmOrderWithNotifications } from "../domain/flow";
 import { linkCallOrder } from "../domain/calls";
+import { getLastOrderForPhone, isUsablePhone } from "../domain/customers";
+import { formatLocalTime } from "../domain/notifications";
+import { speakEta } from "../domain/eta";
 import type {
   CallOutcome,
   ModifierGroupWithModifiers,
@@ -136,6 +139,18 @@ export const TOOL_DEFS: LlmToolDef[] = [
   {
     name: "get_daily_specials",
     description: "Today's active specials. Always call this before mentioning any special.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_repeat_candidate",
+    description:
+      "The caller's most recent completed order (matched by caller ID). Use when they ask for 'the usual' or 'same as last time'. Never recite their history unprompted.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "repeat_last_order",
+    description:
+      "Load the caller's last order into a new draft at CURRENT prices and availability. Report any items that changed or are unavailable, then read the cart back as usual.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -443,6 +458,85 @@ async function executeToolInner(
       };
     }
 
+    case "get_repeat_candidate": {
+      if (!isUsablePhone(ctx.callerNumber)) {
+        return { found: false, note: "No caller ID on this call — repeat orders unavailable." };
+      }
+      const candidate = await getLastOrderForPhone(db, restaurant.id, ctx.callerNumber);
+      if (!candidate) {
+        return { found: false, note: "No previous order for this number." };
+      }
+      return {
+        found: true,
+        customerName: candidate.customerName || candidate.order.customerName || null,
+        previousOrderNumber: candidate.order.publicOrderNumber,
+        lines: candidate.order.items.map((i) => ({
+          name: i.nameSnapshot,
+          quantity: i.quantity,
+          options: i.modifiers.map((m) => m.nameSnapshot),
+        })),
+        note: "Use repeat_last_order to load it at current prices, then read it back as usual.",
+      };
+    }
+
+    case "repeat_last_order": {
+      if (!isUsablePhone(ctx.callerNumber)) {
+        return { error: "No caller ID on this call — take the order fresh instead." };
+      }
+      const candidate = await getLastOrderForPhone(db, restaurant.id, ctx.callerNumber);
+      if (!candidate) return { error: "No previous order found for this number." };
+      if (!state.draftOrderId) {
+        const draft = await createDraft(db, {
+          restaurantId: restaurant.id,
+          customerPhone: ctx.callerNumber,
+          customerName: candidate.customerName || candidate.order.customerName || "",
+          orderType: "takeaway",
+          callId: ctx.callId,
+          source: "phone",
+        });
+        state.draftOrderId = draft.id;
+        state.mutationSeq++;
+        if (ctx.callId) await linkCallOrder(db, ctx.callId, draft.id);
+      }
+      const changes: string[] = [];
+      let added = 0;
+      for (const line of candidate.order.items) {
+        if (!line.menuItemId) {
+          changes.push(`${line.nameSnapshot} was a special that has ended`);
+          continue;
+        }
+        try {
+          await addOrderItem(db, {
+            orderId: state.draftOrderId!,
+            menuItemId: line.menuItemId,
+            quantity: line.quantity,
+            modifierIds: line.modifiers.map((m) => m.modifierId).filter((id): id is string => Boolean(id)),
+            removals: line.removals,
+            specialInstructions: line.specialInstructions || undefined,
+          });
+          added++;
+        } catch (err) {
+          if (err instanceof OrderValidationError) {
+            changes.push(`${line.nameSnapshot}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+      state.mutationSeq++;
+      state.summarySeq = state.mutationSeq;
+      const updated = await getOrderWithItems(db, state.draftOrderId!);
+      return {
+        ...(updated ? orderPublic(updated) : {}),
+        repeatedLines: added,
+        changes,
+        note:
+          changes.length > 0
+            ? "Mention what changed, then read the cart back with the current total."
+            : "Prices are current — read the cart back with the total.",
+      };
+    }
+
     case "create_order_draft": {
       if (state.draftOrderId) {
         const existing = await getOrderWithItems(db, state.draftOrderId);
@@ -606,11 +700,15 @@ async function executeToolInner(
       });
       state.confirmedOrderNumber = result.order.publicOrderNumber;
       state.outcome = "ORDER_COMPLETED";
+      const readyAt = result.order.currentEstimatedReadyAt;
       return {
         confirmed: true,
         orderNumber: result.order.publicOrderNumber,
         total: formatCents(result.order.totalCents),
-        note: "Order stored and kitchen notified. Give the customer the order number, say goodbye, then end_call.",
+        readyEstimate: readyAt
+          ? `${speakEta(readyAt, now)} (around ${formatLocalTime(readyAt, restaurant.timezone)})`
+          : null,
+        note: "Order stored and kitchen notified. Give the customer the order number and the ready estimate using 'about', pay on collection, say goodbye, then end_call.",
       };
     }
 

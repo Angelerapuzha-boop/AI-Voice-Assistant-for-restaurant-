@@ -31,6 +31,26 @@ const FIELDS: FieldDef[] = [
     type: "number",
     source: "settings",
   },
+  {
+    key: "kitchenCapacity",
+    label: "Kitchen capacity (orders cooked in parallel)",
+    type: "number",
+    hint: "Used for spoken ready-time estimates",
+    source: "settings",
+  },
+  {
+    key: "simpleBaselineSeconds",
+    label: "Simple order prep time (seconds)",
+    type: "number",
+    source: "settings",
+  },
+  {
+    key: "complexBaselineSeconds",
+    label: "Large order prep time (seconds)",
+    type: "number",
+    hint: "3+ lines or 4+ items counts as large",
+    source: "settings",
+  },
   { key: "orderNumberPrefix", label: "Order number prefix", type: "text", source: "settings" },
 ];
 

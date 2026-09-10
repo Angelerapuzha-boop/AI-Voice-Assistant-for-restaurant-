@@ -3,9 +3,11 @@ import { env } from "../env";
 import { formatCents } from "../money";
 import type { OrderType, OrderWithItems, Restaurant, RestaurantSettings } from "../types";
 import { addOrderItem, confirmOrder, createDraft, OrderValidationError } from "./orders";
-import { customerSmsBody, enqueueNotification, ownerSmsBody } from "./notifications";
+import { customerSmsBody, enqueueNotification, formatLocalTime, ownerSmsBody } from "./notifications";
 import { enqueueWebhookEvent } from "./webhooks";
 import { enqueueSquareOrderPush } from "./square";
+import { estimateForNewOrder } from "./eta";
+import { newTrackingToken, upsertCustomerForOrder } from "./customers";
 
 /**
  * Confirm an order and, in the SAME transaction, enqueue the owner SMS
@@ -30,6 +32,28 @@ export async function confirmOrderWithNotifications(
     idempotencyKey: params.idempotencyKey,
     actor: params.actor,
     onConfirmed: async (tx, order) => {
+      // Queue-aware ready estimate: first promise is immutable for
+      // performance measurement; the current estimate may move later.
+      const readyAt =
+        !order.requestedAsap && order.requestedTime
+          ? order.requestedTime
+          : await estimateForNewOrder(tx, {
+              restaurantId: restaurant.id,
+              settings,
+              lineCount: order.items.length,
+              quantityTotal: order.items.reduce((sum, i) => sum + i.quantity, 0),
+            });
+      const tracking = newTrackingToken();
+      await tx.query(
+        `UPDATE orders SET first_promised_ready_at = $2, current_estimated_ready_at = $2,
+           tracking_token_hash = $3 WHERE id = $1`,
+        [order.id, readyAt, tracking.hash],
+      );
+      order.firstPromisedReadyAt = readyAt;
+      order.currentEstimatedReadyAt = readyAt;
+      await upsertCustomerForOrder(tx, order);
+      const trackUrl = `${env.APP_URL.replace(/\/$/, "")}/track/${tracking.token}`;
+
       const ownerNumber = settings.ownerSmsNumber || env.OWNER_NOTIFICATION_PHONE;
       if (ownerNumber) {
         await enqueueNotification(tx, {
@@ -39,12 +63,15 @@ export async function confirmOrderWithNotifications(
           body: ownerSmsBody(order, restaurant, env.APP_URL),
         });
       }
-      if (settings.customerSmsEnabled && order.customerPhone) {
+      if (settings.customerSmsEnabled && order.customerPhone && order.source === "phone") {
         await enqueueNotification(tx, {
           orderId: order.id,
           kind: "customer_sms",
           toNumber: order.customerPhone,
-          body: customerSmsBody(order, restaurant),
+          body:
+            `${restaurant.name} #${order.publicOrderNumber} confirmed. ` +
+            `About ${formatLocalTime(readyAt, restaurant.timezone)}. Pay on collection. ` +
+            `Track: ${trackUrl}`,
         });
       }
       await enqueueWebhookEvent(tx, {
@@ -113,11 +140,19 @@ export async function placePosOrder(
     orderNumberPrefix: params.settings.orderNumberPrefix,
     actor: params.actorEmail,
     onConfirmed: async (tx, confirmed) => {
+      const readyAt = await estimateForNewOrder(tx, {
+        restaurantId: params.restaurant.id,
+        settings: params.settings,
+        lineCount: confirmed.items.length,
+        quantityTotal: confirmed.items.reduce((sum, i) => sum + i.quantity, 0),
+      });
       await tx.query(
-        `UPDATE orders SET payment_method = $2, paid_at = now(),
-           customer_notes = $3, updated_at = now() WHERE id = $1`,
-        [confirmed.id, params.paymentMethod, params.customerNotes ?? ""],
+        `UPDATE orders SET payment_method = $2, paid_at = now(), customer_notes = $3,
+           first_promised_ready_at = $4, current_estimated_ready_at = $4,
+           updated_at = now() WHERE id = $1`,
+        [confirmed.id, params.paymentMethod, params.customerNotes ?? "", readyAt],
       );
+      confirmed.currentEstimatedReadyAt = readyAt;
       await enqueueSquareOrderPush(tx, params.restaurant.id, confirmed);
     },
   });

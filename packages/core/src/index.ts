@@ -13,6 +13,8 @@ export * from "./domain/orders";
 export * from "./domain/notifications";
 export * from "./domain/webhooks";
 export * from "./domain/square";
+export * from "./domain/customers";
+export * from "./domain/eta";
 export * from "./domain/calls";
 export * from "./domain/audit";
 export * from "./domain/flow";

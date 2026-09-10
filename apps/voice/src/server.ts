@@ -15,6 +15,17 @@ import { RelaySession } from "./relay-session";
 import { startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
 
+// A phone service must never die silently mid-call: log the fault loudly.
+// An uncaught exception exits (the watchdog restarts within seconds);
+// an unhandled rejection is logged and survived.
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal-guard] unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[fatal-guard] uncaught exception, exiting for watchdog restart:", err);
+  process.exit(1);
+});
+
 const app = Fastify({
   logger: { level: "info" },
 });

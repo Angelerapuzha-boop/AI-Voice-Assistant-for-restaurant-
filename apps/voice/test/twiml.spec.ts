@@ -4,6 +4,9 @@ import type { RestaurantSettings } from "@meatbox/core";
 
 const settings: RestaurantSettings = {
   restaurantId: "r",
+  kitchenCapacity: 3,
+  simpleBaselineSeconds: 600,
+  complexBaselineSeconds: 1200,
   ownerSmsNumber: "",
   customerSmsEnabled: false,
   futureOrdersEnabled: true,
