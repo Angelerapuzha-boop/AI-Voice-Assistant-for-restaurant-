@@ -195,7 +195,9 @@ export class RelaySession {
       this.pendingText = "";
       this.pendingTimer = null;
       if (merged) this.enqueueTurn(merged);
-    }, 250);
+      // 400ms: the demo-call recording proved 250ms splits a natural
+      // mid-sentence pause ("nah, — that's it") into two wrong turns.
+    }, 400);
   }
 
   /** Serialise turns — a new final prompt aborts a stale in-flight turn. */
