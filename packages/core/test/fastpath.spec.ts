@@ -189,6 +189,63 @@ describe("fast paths (LLM must not be called)", () => {
   });
 });
 
+describe("pending-item safety", () => {
+  it("an unrelated successful add must NOT clear the pending item", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [{ name: "Water", qty: 1 }]);
+    const chicken = await findItemByName(db, "Chicken Meatbox");
+    agent.state.pendingItem = {
+      menuItemId: chicken.id,
+      quantity: 2,
+      modifierIds: [],
+      removals: [],
+    };
+    // Simulate the executor's successful add of a DIFFERENT item (kebab):
+    const { executeTool } = await import("../src/agent/tools");
+    const kebab = await findItemByName(db, "Chicken Kebab");
+    const result = await executeTool(
+      { ...agentCtx() },
+      agent.state,
+      "add_order_item",
+      { menuItemId: kebab.id, quantity: 1 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(agent.state.pendingItem).not.toBeNull(); // meatboxes still pending
+    // …and the pending fast path still completes them:
+    agent.state.lastAssistantText = "Chips and salad, or rice and salad?";
+    const turn = await agent.handleTurn("chips and salad on both");
+    expect(turn.fastPath).toBe("pending_fill");
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.items.some((i) => i.nameSnapshot === "Chicken Meatbox" && i.quantity === 2)).toBe(
+      true,
+    );
+  });
+
+  it('finishing with an unresolved pending item falls through to the LLM (never drop an item)', async () => {
+    const scripted: Llm = {
+      stream() {
+        return (async function* () {
+          yield { type: "text" as const, text: "LLM resolves it." };
+          yield { type: "stop" as const, reason: "end_turn" };
+        })();
+      },
+    };
+    const agent = new OrderAgent(scripted, agentCtx());
+    await draftWith(agent, [{ name: "Water", qty: 1 }], "Kev");
+    const chicken = await findItemByName(db, "Chicken Meatbox");
+    agent.state.pendingItem = {
+      menuItemId: chicken.id,
+      quantity: 1,
+      modifierIds: [],
+      removals: [],
+    };
+    agent.state.lastAssistantText = "Anything else?";
+    const turn = await agent.handleTurn("nah that's it");
+    expect(turn.fastPath).toBeUndefined();
+    expect(turn.text).toBe("LLM resolves it.");
+  });
+});
+
 describe("fall-through to the LLM", () => {
   const scripted: Llm = {
     stream() {

@@ -739,7 +739,11 @@ async function executeToolInner(
         }
         throw err;
       }
-      state.pendingItem = null;
+      // Only the pending item's own successful add clears it — an
+      // unrelated item succeeding (parallel adds) must not wipe it.
+      if (state.pendingItem && state.pendingItem.menuItemId === addParams.menuItemId) {
+        state.pendingItem = null;
+      }
       state.mutationSeq++;
       // The full cart + totals are in this response, so the model now holds
       // the current state — that satisfies the stale-state confirm guard.

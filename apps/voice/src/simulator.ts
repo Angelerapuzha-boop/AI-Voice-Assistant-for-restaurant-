@@ -8,6 +8,7 @@ import {
   getHours,
   getOrderWithItems,
   getSettings,
+  recordCallEvent,
   OrderAgent,
   startCall,
   type Llm,
@@ -93,7 +94,9 @@ export async function simulatorTurn(
     text,
     at: new Date().toISOString(),
   });
+  const turnStarted = Date.now();
   const result = await session.agent.handleTurn(text);
+  const turnMs = Date.now() - turnStarted;
   if (result.text) {
     await appendTranscript(db, session.callId, {
       role: "assistant",
@@ -101,6 +104,24 @@ export async function simulatorTurn(
       at: new Date().toISOString(),
     });
   }
+  // Diagnostics parity with phone calls: simulator turns show up on the
+  // Voice quality page with per-turn latency and tool rounds too.
+  for (const call of result.toolCalls) {
+    await recordCallEvent(db, session.callId, "tool_call", {
+      name: call.name,
+      input: call.input,
+      result: call.result,
+    });
+  }
+  await recordCallEvent(db, session.callId, turnMs > 8000 ? "slow_turn" : "turn_metrics", {
+    turnMs,
+    firstTokenMs: null,
+    fillerSent: false,
+    toolCalls: result.toolCalls.length,
+    interrupted: result.interrupted,
+    fastPath: result.fastPath ?? null,
+    assistantWords: result.text ? result.text.trim().split(/\s+/).length : 0,
+  });
   const orderId = session.agent.state.draftOrderId;
   const order = orderId ? await getOrderWithItems(db, orderId) : null;
   if (result.endCall) {

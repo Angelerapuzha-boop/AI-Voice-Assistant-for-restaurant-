@@ -264,8 +264,13 @@ export async function tryFastPath(
     return { handled: true, say: "Yep.", toolCalls: calls, kind: "wait" };
   }
 
+  // A pending (incomplete) item means the order isn't settled — finishing
+  // or confirming deterministically could silently DROP that item. The LLM
+  // has the conversational context to resolve it.
+  const hasPending = Boolean(state.pendingItem);
+
   // ---- final YES at read-back -> confirm + close + hang up
-  if (atConfirmStage(state) && state.draftOrderId && isYes(text)) {
+  if (atConfirmStage(state) && state.draftOrderId && !hasPending && isYes(text)) {
     const result = await run("confirm_order", {});
     if (result.error) return NOT_HANDLED; // guard tripped -> let the LLM sort it out
     const eta = typeof result.readyEstimate === "string"
@@ -277,7 +282,7 @@ export async function tryFastPath(
   }
 
   // ---- "anything else?" -> "nah" -> name (if needed) or read-back
-  if (atAnythingElseStage(state) && state.draftOrderId && isFinished(text)) {
+  if (atAnythingElseStage(state) && state.draftOrderId && !hasPending && isFinished(text)) {
     const order = await getOrderWithItems(ctx.db, state.draftOrderId);
     if (!order || order.items.length === 0) return NOT_HANDLED;
     // Anything still missing a required option? Let the LLM ask properly.
