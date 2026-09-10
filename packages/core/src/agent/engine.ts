@@ -77,6 +77,7 @@ export class OrderAgent {
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         const blocks: unknown[] = [];
         let currentText = "";
+        let firstTextThisIteration = true;
         const pendingTools: { id: string; name: string; input: Record<string, unknown> }[] = [];
 
         for await (const event of this.llm.stream({
@@ -86,6 +87,13 @@ export class OrderAgent {
           signal,
         })) {
           if (event.type === "text") {
+            // Speech from separate tool-loop iterations must not glue
+            // together ("...order.Perfect, that's...") — TTS reads it badly.
+            if (firstTextThisIteration && spokenText && !/\s$/.test(spokenText)) {
+              spokenText += " ";
+              handlers.onText?.(" ");
+            }
+            firstTextThisIteration = false;
             currentText += event.text;
             spokenText += event.text;
             handlers.onText?.(event.text);
