@@ -40,7 +40,15 @@ export const POST = guarded(async (req: Request, ctx: { params: Promise<{ id: st
     // Kitchen state changed: refresh queued orders' current estimates
     // (first promises stay untouched).
     if (["preparing", "ready", "completed", "cancelled"].includes(parsed.data.status)) {
-      await recalcQueueEstimates(db(), { restaurantId: restaurant.id, settings });
+      await recalcQueueEstimates(db(), {
+        restaurantId: restaurant.id,
+        settings,
+        delayNotify: {
+          restaurant,
+          customerSmsEnabled: settings.customerSmsEnabled,
+          thresholdSeconds: settings.delayNotifyThresholdSeconds,
+        },
+      });
     }
     return Response.json({ order });
   } catch (err) {

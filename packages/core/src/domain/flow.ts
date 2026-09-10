@@ -24,9 +24,10 @@ export async function confirmOrderWithNotifications(
     idempotencyKey?: string;
     actor?: string;
   },
-): Promise<{ order: OrderWithItems; alreadyConfirmed: boolean }> {
+): Promise<{ order: OrderWithItems; alreadyConfirmed: boolean; trackUrl?: string }> {
   const { restaurant, settings } = params;
-  return confirmOrder(db, {
+  let trackUrl: string | undefined;
+  const result = await confirmOrder(db, {
     orderId: params.orderId,
     orderNumberPrefix: settings.orderNumberPrefix,
     idempotencyKey: params.idempotencyKey,
@@ -52,7 +53,7 @@ export async function confirmOrderWithNotifications(
       order.firstPromisedReadyAt = readyAt;
       order.currentEstimatedReadyAt = readyAt;
       await upsertCustomerForOrder(tx, order);
-      const trackUrl = `${env.APP_URL.replace(/\/$/, "")}/track/${tracking.token}`;
+      trackUrl = `${env.APP_URL.replace(/\/$/, "")}/track/${tracking.token}`;
 
       const ownerNumber = settings.ownerSmsNumber || env.OWNER_NOTIFICATION_PHONE;
       if (ownerNumber) {
@@ -90,6 +91,7 @@ export async function confirmOrderWithNotifications(
       await enqueueSquareOrderPush(tx, restaurant.id, order);
     },
   });
+  return { ...result, trackUrl };
 }
 
 /**

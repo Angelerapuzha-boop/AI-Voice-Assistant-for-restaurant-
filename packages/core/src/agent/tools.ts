@@ -22,6 +22,7 @@ import {
   updateOrderItem,
 } from "../domain/orders";
 import { confirmOrderWithNotifications } from "../domain/flow";
+import { createReviewLink } from "../domain/review";
 import { linkCallOrder } from "../domain/calls";
 import { getLastOrderForPhone, isUsablePhone } from "../domain/customers";
 import { enqueueNotification, formatLocalTime } from "../domain/notifications";
@@ -53,6 +54,8 @@ export interface AgentState {
   mutationSeq: number;
   summarySeq: number;
   confirmedOrderNumber: string | null;
+  /** Visual path: a review link was texted; the draft awaits the customer's tap. */
+  reviewLinkSent: boolean;
   endCallRequested: boolean;
   outcome: CallOutcome;
 }
@@ -63,6 +66,7 @@ export function initialAgentState(): AgentState {
     mutationSeq: 0,
     summarySeq: 0,
     confirmedOrderNumber: null,
+    reviewLinkSent: false,
     endCallRequested: false,
     outcome: "NO_ORDER",
   };
@@ -256,6 +260,12 @@ export const TOOL_DEFS: LlmToolDef[] = [
     name: "confirm_order",
     description:
       "Confirm the order AFTER reading the summary back and hearing an explicit yes. Stores the order, notifies the kitchen and returns the order number.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "send_review_link",
+    description:
+      "VISUAL confirmation: text the caller a secure link to check and confirm the order themselves (instead of a spoken read-back). Only when the caller prefers it or a long order makes read-back impractical. The order does NOT reach the kitchen until they tap Confirm — tell them that.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -767,6 +777,27 @@ async function executeToolInner(
           ? `${speakEta(readyAt, now)} (around ${formatLocalTime(readyAt, restaurant.timezone)})`
           : null,
         note: "Order stored and kitchen notified. Give the customer the order number and the ready estimate using 'about', pay on collection, say goodbye, then end_call.",
+      };
+    }
+
+    case "send_review_link": {
+      const order = await requireDraft(ctx, state);
+      if (!settings.customerSmsEnabled || !isUsablePhone(order.customerPhone || ctx.callerNumber)) {
+        return { error: "Can't text this caller — confirm by voice read-back instead." };
+      }
+      if (!order.customerPhone && ctx.callerNumber) {
+        await setOrderDetails(db, { orderId: order.id, customerPhone: ctx.callerNumber });
+      }
+      const fresh = (await getOrderWithItems(db, order.id))!;
+      const { expiresAt } = await createReviewLink(db, { order: fresh, restaurant, settings });
+      state.reviewLinkSent = true;
+      state.outcome = "REVIEW_LINK_SENT";
+      const minutes = Math.max(1, Math.round((expiresAt.getTime() - now.getTime()) / 60_000));
+      return {
+        ok: true,
+        expiresInMinutes: minutes,
+        note:
+          "Say a text is on its way (not that it has arrived), and that the order only goes to the kitchen once they tap Confirm on the link. Then say goodbye and end_call. Do NOT call confirm_order.",
       };
     }
 

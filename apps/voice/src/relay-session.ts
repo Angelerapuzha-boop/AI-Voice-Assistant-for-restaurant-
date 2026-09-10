@@ -288,8 +288,10 @@ export class RelaySession {
     let outcome: CallOutcome = forceOutcome ?? state?.outcome ?? "NO_ORDER";
 
     // Draft order left behind by a dropped/failed call → needs review,
-    // but a CONFIRMED order always survives untouched.
-    if (state?.draftOrderId) {
+    // but a CONFIRMED order always survives untouched. A draft awaiting the
+    // customer's tap on a review link is EXPECTED to outlive the call: leave
+    // it alone (the expiry sweep cancels it if never confirmed).
+    if (state?.draftOrderId && !state.reviewLinkSent) {
       const order = await getOrder(db, state.draftOrderId);
       if (order && order.status === "draft") {
         if (order.subtotalCents > 0 || order.customerName) {

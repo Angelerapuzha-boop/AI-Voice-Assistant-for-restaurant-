@@ -38,6 +38,8 @@ export default function CallsPage() {
                 className={`ml-auto rounded-full px-2 py-0.5 text-xs font-bold ${
                   call.outcome === "ORDER_COMPLETED"
                     ? "bg-green-100 text-green-800"
+                    : call.outcome === "REVIEW_LINK_SENT"
+                      ? "bg-amber-100 text-amber-800"
                     : call.outcome === "NEEDS_REVIEW"
                       ? "bg-purple-100 text-purple-800"
                       : "bg-stone-200 text-stone-600"

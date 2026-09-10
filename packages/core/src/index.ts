@@ -18,6 +18,7 @@ export * from "./domain/eta";
 export * from "./domain/calls";
 export * from "./domain/audit";
 export * from "./domain/flow";
+export * from "./domain/review";
 export * from "./agent/llm";
 export * from "./agent/prompt";
 export * from "./agent/tools";

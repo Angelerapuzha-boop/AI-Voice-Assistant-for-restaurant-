@@ -12,7 +12,7 @@ import {
 import { conversationRelayTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
-import { startSmsWorker } from "./sms-worker";
+import { startMaintenanceWorker, startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
 
 // A phone service must never die silently mid-call: log the fault loudly.
@@ -185,9 +185,11 @@ app.post("/simulator/message", async (req, reply) => {
 
 await runMigrations(getDb());
 const smsWorker = startSmsWorker((msg) => app.log.info(msg));
+const maintenanceWorker = startMaintenanceWorker((msg) => app.log.info(msg));
 
 const shutdown = async () => {
   smsWorker.stop();
+  maintenanceWorker.stop();
   await app.close();
   process.exit(0);
 };

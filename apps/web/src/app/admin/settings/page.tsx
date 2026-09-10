@@ -65,6 +65,20 @@ const FIELDS: FieldDef[] = [
     hint: "3+ lines or 4+ items counts as large",
     source: "settings",
   },
+  {
+    key: "reviewTtlSeconds",
+    label: "Text-to-confirm link lifetime (seconds)",
+    type: "number",
+    hint: "Unconfirmed 'check and confirm' orders expire after this and never reach the kitchen",
+    source: "settings",
+  },
+  {
+    key: "delayNotifyThresholdSeconds",
+    label: "Delay SMS threshold (seconds)",
+    type: "number",
+    hint: "Customers get one update text when their estimate slips by more than this",
+    source: "settings",
+  },
   { key: "orderNumberPrefix", label: "Order number prefix", type: "text", source: "settings" },
 ];
 

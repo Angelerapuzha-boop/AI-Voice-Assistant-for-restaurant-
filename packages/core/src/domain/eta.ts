@@ -1,5 +1,7 @@
 import type { Queryable } from "../db/client";
-import type { RestaurantSettings } from "../types";
+import type { Restaurant, RestaurantSettings } from "../types";
+import { enqueueNotification, formatLocalTime } from "./notifications";
+import { isUsablePhone } from "./customers";
 
 /**
  * Deterministic, explainable kitchen-ready estimator (lane model).
@@ -109,12 +111,25 @@ export async function recalcQueueEstimates(
       complexBaselineSeconds: number;
       minPrepMinutes: number;
     };
+    /**
+     * When set, a queued phone order whose estimate slips materially past
+     * what the customer was last told (first promise or last delay SMS)
+     * gets ONE throttled delay SMS; the notified estimate becomes the new
+     * baseline, so it only fires again on a further material slip.
+     */
+    delayNotify?: {
+      restaurant: Restaurant;
+      customerSmsEnabled: boolean;
+      thresholdSeconds: number;
+    };
     now?: Date;
   },
 ): Promise<number> {
   const now = params.now ?? new Date();
   const res = await db.query(
     `SELECT o.id, o.status, o.confirmed_at, o.current_estimated_ready_at,
+            o.customer_phone, o.source, o.public_order_number,
+            o.first_promised_ready_at, o.delay_notified_ready_at,
             COUNT(oi.id)::int AS line_count, COALESCE(SUM(oi.quantity), 0)::int AS quantity_total
      FROM orders o LEFT JOIN order_items oi ON oi.order_id = o.id
      WHERE o.restaurant_id = $1 AND o.status IN ('new', 'accepted', 'preparing')
@@ -136,6 +151,11 @@ export async function recalcQueueEstimates(
       id: string;
       status: string;
       current_estimated_ready_at: Date | null;
+      customer_phone: string;
+      source: string;
+      public_order_number: string | null;
+      first_promised_ready_at: Date | null;
+      delay_notified_ready_at: Date | null;
       line_count: number;
       quantity_total: number;
     };
@@ -164,6 +184,33 @@ export async function recalcQueueEstimates(
         new Date(ready),
       ]);
       updated++;
+    }
+
+    // Material-delay SMS (spec 12): compare against what the customer was
+    // last told, not the previous internal estimate — cooldown built in.
+    const dn = params.delayNotify;
+    if (
+      dn &&
+      dn.customerSmsEnabled &&
+      row.source === "phone" &&
+      isUsablePhone(row.customer_phone) &&
+      row.public_order_number
+    ) {
+      const lastTold = row.delay_notified_ready_at ?? row.first_promised_ready_at;
+      if (lastTold && ready - lastTold.getTime() > dn.thresholdSeconds * 1000) {
+        await db.query(`UPDATE orders SET delay_notified_ready_at = $2 WHERE id = $1`, [
+          row.id,
+          new Date(ready),
+        ]);
+        await enqueueNotification(db, {
+          orderId: row.id,
+          kind: "customer_sms",
+          toNumber: row.customer_phone,
+          body:
+            `${dn.restaurant.name}: sorry, order #${row.public_order_number} is running behind — ` +
+            `now expected about ${formatLocalTime(new Date(ready), dn.restaurant.timezone)}.`,
+        });
+      }
     }
   }
   return updated;

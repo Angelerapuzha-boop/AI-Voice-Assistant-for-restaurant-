@@ -12,6 +12,7 @@ export type OrderStatus =
 
 export type CallOutcome =
   | "ORDER_COMPLETED"
+  | "REVIEW_LINK_SENT"
   | "MENU_ENQUIRY"
   | "CALL_DROPPED"
   | "CUSTOMER_CANCELLED"
@@ -33,6 +34,8 @@ export interface RestaurantSettings {
   complexBaselineSeconds: number;
   acceptingOrders: boolean;
   pauseReason: string;
+  reviewTtlSeconds: number;
+  delayNotifyThresholdSeconds: number;
   ownerSmsNumber: string;
   customerSmsEnabled: boolean;
   futureOrdersEnabled: boolean;
@@ -150,6 +153,8 @@ export interface Order {
   customerId: string | null;
   firstPromisedReadyAt: Date | null;
   currentEstimatedReadyAt: Date | null;
+  reviewExpiresAt: Date | null;
+  delayNotifiedReadyAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

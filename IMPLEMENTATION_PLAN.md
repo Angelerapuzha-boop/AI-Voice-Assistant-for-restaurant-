@@ -37,7 +37,9 @@ the core ordering loop works").
 | Queue re-estimation on kitchen changes; overdue display | ✅ | `recalcQueueEstimates` + status route + kitchen |
 | SMS delivery-status callbacks (queued ≠ sent ≠ delivered) | ✅ | `/twilio/sms-status`, delivery_status columns |
 | /customers screen with repeat-history privacy toggle | ✅ | `/admin/customers` |
-| Conversation evaluations (spec §17 list) | ✅ | 86 tests (75 core + 11 voice) cover 1–14 in essence |
+| Visual confirmation path (review link + tap Confirm, spec §4 VISUAL) | ✅ | `review.ts`, `send_review_link` tool, `/confirm/[token]` page + POST-only commit, expiry sweep; migration 0006 |
+| Material-delay SMS (throttled, deduplicated, spec §12) | ✅ | `recalcQueueEstimates` delayNotify + periodic maintenance worker; `delay_notify_threshold_seconds` in Settings |
+| Conversation evaluations (spec §17 list) | ✅ | 94 tests (83 core + 11 voice) cover 1–14 in essence |
 
 ## Adapted (🟡) — documented deviations
 
@@ -45,14 +47,11 @@ the core ordering loop works").
   server-side tenancy (single restaurant). See `docs/DECISIONS.md`.
 - **Quote/confirmation tables** (order_quotes, confirmations, challenges) →
   enforced behaviourally: every cart mutation returns current state, confirm
-  requires that state + explicit yes; idempotent commit. Full quote-versioning
-  ledger deferred until multi-channel confirmation exists.
-- **Visual confirmation path** (review link + tap Confirm) → deferred; voice
-  confirmation only. Tracking page is read-only (no Confirm button ever).
+  requires that state + explicit yes; idempotent commit. The visual path adds
+  a frozen single-use token (hash-stored, TTL) as its confirmation record; a
+  full quote-versioning ledger remains unnecessary at this scale.
 - **Demo isolation (is_demo)** → simulator orders are real rows in the dev
   database and are cancelled after each demo cycle (single-environment dev).
-- **Delay re-estimation** → current estimates now recalculate on kitchen
-  state changes; the throttled delay-SMS to customers remains deferred.
 
 ## Deferred (⏳) — Phase 3/4 per the master prompt's own sequencing
 
@@ -65,6 +64,8 @@ the core ordering loop works").
 
 ## Evidence
 
-`pnpm test` → 80 tests green (core 69, voice 11). Live verifications logged in
+`pnpm test` → 94 tests green (core 83, voice 11). Live verifications logged in
 git history: MB1014 (takeaway-first + spoken ETA), MB1013 (kitchen <2s),
-MB1010 (real phone call), tracking SMS content asserted in `repeat.spec.ts`.
+MB1010 (real phone call), tracking SMS content asserted in `repeat.spec.ts`;
+visual-confirm commit/expiry/idempotency and delay-SMS cooldown in
+`review.spec.ts`.

@@ -2,8 +2,12 @@ import {
   createSmsSender,
   createSquareOrderSender,
   createWebhookSender,
+  expireStaleReviewDrafts,
   getDb,
+  getDefaultRestaurant,
+  getSettings,
   processPendingNotifications,
+  recalcQueueEstimates,
   type SmsSender,
 } from "@meatbox/core";
 
@@ -32,5 +36,40 @@ export function startSmsWorker(log: (msg: string) => void): { stop: () => void }
         running = false;
       });
   }, 3000);
+  return { stop: () => clearInterval(interval) };
+}
+
+/**
+ * Periodic housekeeping (spec 4/10/12): cancel review-link drafts that were
+ * never confirmed, and refresh queued orders' current estimates so queue
+ * wait shows up even between kitchen taps — materially delayed phone orders
+ * get one throttled SMS (dedup handled inside recalcQueueEstimates).
+ */
+export function startMaintenanceWorker(log: (msg: string) => void): { stop: () => void } {
+  let running = false;
+  const interval = setInterval(() => {
+    if (running) return;
+    running = true;
+    (async () => {
+      const db = getDb();
+      const expired = await expireStaleReviewDrafts(db);
+      if (expired > 0) log(`review sweep: ${expired} unconfirmed review draft(s) expired`);
+      const restaurant = await getDefaultRestaurant(db);
+      const settings = await getSettings(db, restaurant.id);
+      await recalcQueueEstimates(db, {
+        restaurantId: restaurant.id,
+        settings,
+        delayNotify: {
+          restaurant,
+          customerSmsEnabled: settings.customerSmsEnabled,
+          thresholdSeconds: settings.delayNotifyThresholdSeconds,
+        },
+      });
+    })()
+      .catch((err: Error) => log(`maintenance pass failed: ${err.message}`))
+      .finally(() => {
+        running = false;
+      });
+  }, 60_000);
   return { stop: () => clearInterval(interval) };
 }
