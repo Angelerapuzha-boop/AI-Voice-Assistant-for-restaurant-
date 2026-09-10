@@ -22,6 +22,12 @@ const envSchema = z.object({
   TWILIO_ACCOUNT_SID: z.string().default(""),
   TWILIO_AUTH_TOKEN: z.string().default(""),
   TWILIO_PHONE_NUMBER: z.string().default(""),
+  // Browser test-calls (Twilio Voice JS SDK): API key pair + TwiML app that
+  // routes browser calls into the same /twilio/voice webhook.
+  TWILIO_API_KEY_SID: z.string().default(""),
+  TWILIO_API_KEY_SECRET: z.string().default(""),
+  TWILIO_TWIML_APP_SID: z.string().default(""),
+
   TWILIO_TTS_PROVIDER: z.string().default("Google"),
   TWILIO_TTS_VOICE: z.string().default("en-AU-Neural2-A"),
   TWILIO_STT_PROVIDER: z.string().default("Deepgram"),

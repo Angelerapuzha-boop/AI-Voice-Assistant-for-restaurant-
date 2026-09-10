@@ -19,6 +19,7 @@ const NAV = [
   { href: "/admin/voice", label: "Voice assistant" },
   { href: "/admin/integrations", label: "Integrations" },
   { href: "/admin/simulator", label: "Test AI" },
+  { href: "/admin/browser-call", label: "Call from browser" },
   { href: "/admin/calls", label: "Call logs" },
   { href: "/admin/voice-quality", label: "Voice quality" },
   { href: "/admin/analytics", label: "Analytics" },

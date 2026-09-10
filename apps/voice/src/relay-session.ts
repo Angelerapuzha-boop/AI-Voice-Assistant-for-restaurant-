@@ -169,7 +169,10 @@ export class RelaySession {
       settings,
       hours,
       callId: call.id,
-      callerNumber: setup.from,
+      // Browser test calls arrive as "client:browser-..." — that's not a
+      // phone number, so treat it as no caller ID (the AI asks for a
+      // contact number if the caller orders, and no SMS is attempted).
+      callerNumber: setup.from?.startsWith("client:") ? undefined : setup.from,
       now: this.deps.now ?? (() => new Date()),
       menuCatalog,
     });
