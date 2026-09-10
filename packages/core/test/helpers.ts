@@ -27,7 +27,8 @@ export async function setupTestDb(): Promise<TestContext> {
 /** Wipe transactional data (orders/calls/notifications), keep the menu. */
 export async function resetTransactionalData(db: pg.Pool): Promise<void> {
   await db.query(
-    `TRUNCATE order_item_modifiers, order_items, notification_attempts, call_events, orders, calls CASCADE`,
+    `TRUNCATE order_item_modifiers, order_items, notification_attempts, call_events, orders, calls,
+             kiosk_lookup_failures CASCADE`,
   );
   await db.query(`UPDATE daily_specials SET quantity_used = 0`);
 }

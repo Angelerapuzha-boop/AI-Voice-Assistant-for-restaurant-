@@ -8,6 +8,9 @@ import {
   getSettings,
   listItems,
   runMigrations,
+  settlePayment,
+  SquareTerminalProvider,
+  getSquareConnection,
 } from "@meatbox/core";
 import { conversationRelayTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
@@ -179,6 +182,45 @@ app.post("/simulator/message", async (req, reply) => {
   } catch (err) {
     return reply.code(400).send({ error: (err as Error).message });
   }
+});
+
+// ------------------------------------------------------------ Square payments webhook
+
+/**
+ * Terminal checkout callbacks (Phase 3). Signature-verified against the raw
+ * body; settlement is idempotent, so Square's duplicate/out-of-order
+ * deliveries are harmless. Inert until SQUARE_WEBHOOK_SIGNATURE_KEY is set.
+ */
+await app.register(async (scope) => {
+  scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    done(null, body);
+  });
+  scope.post("/payments/webhook/square", async (req, reply) => {
+    if (!env.SQUARE_WEBHOOK_SIGNATURE_KEY) return reply.code(404).send({ error: "not configured" });
+    const db = getDb();
+    const restaurant = await getDefaultRestaurant(db);
+    const conn = await getSquareConnection(db, restaurant.id);
+    if (!conn) return reply.code(404).send({ error: "not connected" });
+    const provider = new SquareTerminalProvider(conn, env.SQUARE_TERMINAL_DEVICE_ID);
+    const parsed = provider.verifyAndParseWebhook({
+      signature: (req.headers["x-square-hmacsha256-signature"] as string | undefined) ?? "",
+      rawBody: typeof req.body === "string" ? req.body : "",
+      notificationUrl: publicUrl("/payments/webhook/square"),
+    });
+    if (!parsed.valid) {
+      req.log.warn("invalid Square webhook signature");
+      return reply.code(403).send({ error: "bad signature" });
+    }
+    for (const event of parsed.events) {
+      if (event.status === "pending") continue;
+      await settlePayment(db, {
+        providerPaymentId: event.providerPaymentId,
+        outcome: event.status,
+        settlementId: event.settlementId,
+      });
+    }
+    return { ok: true };
+  });
 });
 
 // ------------------------------------------------------------ boot

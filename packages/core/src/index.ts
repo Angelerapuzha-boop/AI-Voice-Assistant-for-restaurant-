@@ -19,6 +19,8 @@ export * from "./domain/calls";
 export * from "./domain/audit";
 export * from "./domain/flow";
 export * from "./domain/review";
+export * from "./domain/payments";
+export * from "./domain/collection";
 export * from "./agent/llm";
 export * from "./agent/prompt";
 export * from "./agent/tools";

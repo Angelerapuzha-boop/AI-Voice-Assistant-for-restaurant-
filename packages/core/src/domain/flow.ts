@@ -154,6 +154,21 @@ export async function placePosOrder(
            updated_at = now() WHERE id = $1`,
         [confirmed.id, params.paymentMethod, params.customerNotes ?? "", readyAt],
       );
+      // Ledger row: POS money taken at the counter is an authorised manual
+      // payment (payment summaries derive from the ledger, spec 14).
+      await tx.query(
+        `INSERT INTO payments (restaurant_id, order_id, provider, method, amount_cents, currency,
+                               status, idempotency_key, authorised_by, settled_at)
+         VALUES ($1, $2, 'manual', $3, $4, 'AUD', 'succeeded', $5, $6, now())`,
+        [
+          params.restaurant.id,
+          confirmed.id,
+          params.paymentMethod,
+          confirmed.totalCents,
+          `pos-${confirmed.id}`,
+          params.actorEmail,
+        ],
+      );
       confirmed.currentEstimatedReadyAt = readyAt;
       await enqueueSquareOrderPush(tx, params.restaurant.id, confirmed);
     },

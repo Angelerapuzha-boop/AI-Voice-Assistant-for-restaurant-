@@ -1,4 +1,10 @@
-import { findOrderByTrackingToken, formatCents, formatLocalTime, getDefaultRestaurant } from "@meatbox/core";
+import {
+  collectionCode,
+  findOrderByTrackingToken,
+  formatCents,
+  formatLocalTime,
+  getDefaultRestaurant,
+} from "@meatbox/core";
 import { db } from "@/lib/db";
 import TrackRefresher from "./refresher";
 
@@ -46,6 +52,14 @@ export default async function TrackPage({ params }: { params: Promise<{ token: s
         <p className="mt-1 text-sm font-semibold text-orange-400">
           {order.paidAt ? "Paid" : "Pay on collection"}
         </p>
+        {!cancelled && order.status !== "completed" && (
+          <p className="mt-2 rounded-lg bg-stone-800 px-3 py-2 text-sm text-stone-300">
+            Pickup code for the in-store screen:{" "}
+            <span className="text-lg font-extrabold tracking-[0.3em] text-white">
+              {collectionCode(order.id)}
+            </span>
+          </p>
+        )}
       </header>
 
       {cancelled ? (

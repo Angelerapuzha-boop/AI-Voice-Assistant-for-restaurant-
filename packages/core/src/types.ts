@@ -159,6 +159,39 @@ export interface Order {
   updatedAt: Date;
 }
 
+export type PaymentStatus = "pending" | "succeeded" | "failed" | "cancelled";
+
+export interface Payment {
+  id: string;
+  restaurantId: string;
+  orderId: string;
+  provider: "mock_terminal" | "square_terminal" | "manual";
+  method: "terminal" | "cash" | "card" | "tap";
+  amountCents: number;
+  currency: string;
+  status: PaymentStatus;
+  providerPaymentId: string | null;
+  idempotencyKey: string;
+  failureReason: string;
+  authorisedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+  settledAt: Date | null;
+}
+
+export interface Refund {
+  id: string;
+  restaurantId: string;
+  paymentId: string;
+  providerRefundId: string | null;
+  amountCents: number;
+  status: "pending" | "succeeded" | "failed";
+  reason: string;
+  createdBy: string;
+  createdAt: Date;
+  settledAt: Date | null;
+}
+
 export interface OrderItemModifier {
   id: string;
   orderItemId: string;

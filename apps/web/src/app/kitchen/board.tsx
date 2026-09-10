@@ -104,12 +104,15 @@ export default function KitchenBoard() {
     };
   }, [refetch]);
 
-  async function setStatus(orderId: string, status: string) {
+  const [settleFor, setSettleFor] = useState<string | null>(null);
+
+  async function setStatus(orderId: string, status: string, settle?: string) {
     await fetch(`/api/orders/${orderId}/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(settle ? { status, settle } : { status }),
     });
+    setSettleFor(null);
     void refetch();
   }
 
@@ -264,7 +267,11 @@ export default function KitchenBoard() {
                   )}
                   {action && (
                     <button
-                      onClick={() => setStatus(order.id, action.status)}
+                      onClick={() =>
+                        action.status === "completed" && !order.paidAt
+                          ? setSettleFor(order.id)
+                          : setStatus(order.id, action.status)
+                      }
                       className={`rounded-lg px-5 py-3 text-lg font-extrabold text-white ${action.color}`}
                     >
                       {action.label}
@@ -272,6 +279,40 @@ export default function KitchenBoard() {
                   )}
                 </div>
               </div>
+
+              {settleFor === order.id && (
+                <div className="mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-3">
+                  <p className="text-sm font-bold text-amber-900">
+                    NOT PAID — take payment before handover:
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setStatus(order.id, "completed", "cash")}
+                      className="rounded-lg bg-green-600 px-4 py-3 font-bold text-white"
+                    >
+                      💵 CASH TAKEN
+                    </button>
+                    <button
+                      onClick={() => setStatus(order.id, "completed", "card")}
+                      className="rounded-lg bg-blue-600 px-4 py-3 font-bold text-white"
+                    >
+                      💳 CARD TAKEN
+                    </button>
+                    <button
+                      onClick={() => setStatus(order.id, "completed", "exception")}
+                      className="rounded-lg bg-stone-300 px-3 py-3 text-sm font-bold text-stone-700"
+                    >
+                      Hand over unpaid (owner OK)
+                    </button>
+                    <button
+                      onClick={() => setSettleFor(null)}
+                      className="rounded-lg px-3 py-3 text-sm text-stone-500"
+                    >
+                      Back
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

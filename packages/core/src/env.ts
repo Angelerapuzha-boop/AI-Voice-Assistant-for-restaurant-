@@ -39,6 +39,15 @@ const envSchema = z.object({
   SQUARE_APP_ID: z.string().default(""),
   SQUARE_APP_SECRET: z.string().default(""),
   SQUARE_ENV: z.enum(["sandbox", "production"]).default("production"),
+  SQUARE_WEBHOOK_SIGNATURE_KEY: z.string().default(""),
+  SQUARE_TERMINAL_DEVICE_ID: z.string().default(""),
+
+  // Phase 3 payments. mock_terminal is an EXPLICIT test adapter (clearly
+  // badged in the UI); square_terminal requires a Square connection plus a
+  // paired Terminal device. Never silently substituted for one another.
+  PAYMENTS_PROVIDER: z.enum(["mock_terminal", "square_terminal"]).default("mock_terminal"),
+  MOCK_TERMINAL_BEHAVIOUR: z.enum(["approve", "decline"]).default("approve"),
+  MOCK_TERMINAL_DELAY_SECONDS: z.coerce.number().default(4),
 
   APP_URL: z.string().default("http://127.0.0.1:4810"),
   VOICE_WEBSOCKET_URL: z.string().default("ws://127.0.0.1:4811/twilio/relay"),

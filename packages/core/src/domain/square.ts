@@ -59,6 +59,9 @@ const OAUTH_SCOPES = [
   "ORDERS_WRITE",
   "INVENTORY_READ",
   "PAYMENTS_READ",
+  // Phase 3: Terminal checkouts + refunds.
+  "PAYMENTS_WRITE",
+  "DEVICE_CREDENTIAL_MANAGEMENT",
 ].join(" ");
 
 /** Signed state so the callback can't be forged. */
@@ -92,7 +95,7 @@ export function squareAuthorizeUrl(redirectUri: string): string {
   return `${apiBase(env.SQUARE_ENV)}/oauth2/authorize?${params}`;
 }
 
-async function squareFetch(
+export async function squareFetch(
   environment: string,
   token: string,
   path: string,
