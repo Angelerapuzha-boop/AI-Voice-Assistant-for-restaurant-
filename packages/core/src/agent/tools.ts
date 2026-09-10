@@ -27,6 +27,7 @@ import { linkCallOrder } from "../domain/calls";
 import { getLastOrderForPhone, isUsablePhone } from "../domain/customers";
 import { enqueueNotification, formatLocalTime } from "../domain/notifications";
 import { speakEta } from "../domain/eta";
+import { resolveMenuItemByName, resolveModifierNames } from "./catalog";
 import { env } from "../env";
 import type {
   CallOutcome,
@@ -46,6 +47,8 @@ export interface AgentContext {
   callId?: string;
   callerNumber?: string;
   now: () => Date;
+  /** Per-call menu briefing (buildMenuCatalog) — lets the model order by exact name in one round. */
+  menuCatalog?: string;
 }
 
 export interface AgentState {
@@ -58,6 +61,22 @@ export interface AgentState {
   reviewLinkSent: boolean;
   endCallRequested: boolean;
   outcome: CallOutcome;
+  /**
+   * The assistant's previous spoken line (LLM- or fast-path-produced).
+   * The deterministic fast paths key their stage detection off it.
+   */
+  lastAssistantText: string;
+  /**
+   * An add_order_item that failed on a missing REQUIRED option; the fast
+   * path completes it from the caller's short answer without the LLM.
+   */
+  pendingItem: {
+    menuItemId: string;
+    quantity: number;
+    modifierIds: string[];
+    removals: string[];
+    specialInstructions?: string;
+  } | null;
 }
 
 export function initialAgentState(): AgentState {
@@ -69,7 +88,18 @@ export function initialAgentState(): AgentState {
     reviewLinkSent: false,
     endCallRequested: false,
     outcome: "NO_ORDER",
+    lastAssistantText: "",
+    pendingItem: null,
   };
+}
+
+/** "Chips and salad, or rice and salad?" for small groups, else "Base?" */
+export function groupQuestion(groupName: string, optionNames: string[]): string {
+  if (optionNames.length >= 2 && optionNames.length <= 3) {
+    const spoken = optionNames.map((n) => n.replace(/\s*&\s*/g, " and ").toLowerCase());
+    return `${spoken.slice(0, -1).join(", ")}, or ${spoken[spoken.length - 1]}?`;
+  }
+  return `${groupName}?`;
 }
 
 // ------------------------------------------------------------------ defs
@@ -186,10 +216,16 @@ export const TOOL_DEFS: LlmToolDef[] = [
   {
     name: "add_order_item",
     description:
-      "Add an item to the order. Pass modifierIds for every option the customer chose (required groups must be satisfied). removals lists ingredients to leave out.",
+      "Add an item to the order. PREFERRED: pass menuItemName + modifierNames copied EXACTLY from the MENU section — no search needed. Call immediately even if a required option is missing (it saves the item as pending and returns the question to ask). removals lists ingredients to leave out.",
     input_schema: {
       type: "object",
       properties: {
+        menuItemName: { ...str, description: "Exact item name from the MENU section" },
+        modifierNames: {
+          type: "array",
+          items: str,
+          description: "Exact option names from the MENU section",
+        },
         menuItemId: str,
         specialId: str,
         quantity: { ...num, minimum: 1 },
@@ -204,12 +240,17 @@ export const TOOL_DEFS: LlmToolDef[] = [
   {
     name: "update_order_item",
     description:
-      "Change a line in the order: quantity, options (modifierIds replaces ALL options for the line), removals or instructions. Get line ids from get_order_summary.",
+      "Change a line in the order: quantity, options (modifierNames/modifierIds replace ALL options for the line), removals or instructions. Get line ids from get_order_summary.",
     input_schema: {
       type: "object",
       properties: {
         orderItemId: str,
         quantity: { ...num, minimum: 1 },
+        modifierNames: {
+          type: "array",
+          items: str,
+          description: "Exact option names from the MENU section (full replacement)",
+        },
         modifierIds: { type: "array", items: str },
         removals: { type: "array", items: str },
         specialInstructions: str,
@@ -633,15 +674,72 @@ async function executeToolInner(
 
     case "add_order_item": {
       const order = await requireDraft(ctx, state);
-      const updated = await addOrderItem(db, {
+      // Name-based ordering (from the MENU section of the prompt) — the
+      // model never needs a UUID or a search round-trip.
+      let menuItemId = input.menuItemId ? String(input.menuItemId) : undefined;
+      if (!menuItemId && input.menuItemName) {
+        const resolved = await resolveMenuItemByName(db, restaurant.id, String(input.menuItemName));
+        if ("error" in resolved) return { error: resolved.error };
+        menuItemId = resolved.id;
+      }
+      let modifierIds = Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : [];
+      if (Array.isArray(input.modifierNames) && input.modifierNames.length > 0 && menuItemId) {
+        const groups = await getModifierGroups(db, menuItemId);
+        const resolvedMods = resolveModifierNames(groups, input.modifierNames.map(String));
+        if ("error" in resolvedMods) return { error: resolvedMods.error };
+        modifierIds = [...new Set([...modifierIds, ...resolvedMods.ids])];
+      }
+      const addParams = {
         orderId: order.id,
-        menuItemId: input.menuItemId ? String(input.menuItemId) : undefined,
+        menuItemId,
         specialId: input.specialId ? String(input.specialId) : undefined,
         quantity: Number(input.quantity ?? 1),
-        modifierIds: Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : [],
+        modifierIds,
         removals: Array.isArray(input.removals) ? input.removals.map(String) : [],
         specialInstructions: input.specialInstructions ? String(input.specialInstructions) : undefined,
-      });
+      };
+      let updated;
+      try {
+        updated = await addOrderItem(db, addParams);
+      } catch (err) {
+        // A required option is missing: remember the pending item so the
+        // caller's short answer ("chips", "garlic") can complete the add
+        // deterministically without another LLM round-trip — and hand the
+        // model the exact question to relay.
+        if (
+          err instanceof OrderValidationError &&
+          err.code === "MODIFIER_REQUIRED" &&
+          addParams.menuItemId
+        ) {
+          state.pendingItem = {
+            menuItemId: addParams.menuItemId,
+            quantity: addParams.quantity,
+            modifierIds: addParams.modifierIds,
+            removals: addParams.removals,
+            specialInstructions: addParams.specialInstructions,
+          };
+          const groups = await getModifierGroups(db, addParams.menuItemId);
+          const chosen = new Set(addParams.modifierIds);
+          const missing = groups.find((g) => {
+            const minimum = g.required ? Math.max(1, g.minSelect) : g.minSelect;
+            return minimum > 0 && !g.modifiers.some((m) => chosen.has(m.id));
+          });
+          return {
+            error: err.message,
+            code: err.code,
+            itemSavedAsPending: true,
+            ask: missing
+              ? groupQuestion(
+                  missing.name,
+                  missing.modifiers.filter((m) => m.isAvailable).map((m) => m.name),
+                )
+              : undefined,
+            note: "The item is saved as pending. Say ONLY the 'ask' question. The system completes the add from the caller's answer.",
+          };
+        }
+        throw err;
+      }
+      state.pendingItem = null;
       state.mutationSeq++;
       // The full cart + totals are in this response, so the model now holds
       // the current state — that satisfies the stale-state confirm guard.
@@ -651,11 +749,27 @@ async function executeToolInner(
 
     case "update_order_item": {
       const order = await requireDraft(ctx, state);
+      let updateModifierIds = Array.isArray(input.modifierIds)
+        ? input.modifierIds.map(String)
+        : undefined;
+      if (Array.isArray(input.modifierNames)) {
+        const lineRes = await db.query(`SELECT menu_item_id FROM order_items WHERE id = $1`, [
+          String(input.orderItemId ?? ""),
+        ]);
+        const lineItemId = (lineRes.rows[0] as { menu_item_id: string | null } | undefined)
+          ?.menu_item_id;
+        if (lineItemId) {
+          const groups = await getModifierGroups(db, lineItemId);
+          const resolvedMods = resolveModifierNames(groups, input.modifierNames.map(String));
+          if ("error" in resolvedMods) return { error: resolvedMods.error };
+          updateModifierIds = [...new Set([...(updateModifierIds ?? []), ...resolvedMods.ids])];
+        }
+      }
       const updated = await updateOrderItem(db, {
         orderId: order.id,
         orderItemId: String(input.orderItemId ?? ""),
         quantity: input.quantity !== undefined ? Number(input.quantity) : undefined,
-        modifierIds: Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : undefined,
+        modifierIds: updateModifierIds,
         removals: Array.isArray(input.removals) ? input.removals.map(String) : undefined,
         specialInstructions:
           input.specialInstructions !== undefined ? String(input.specialInstructions) : undefined,
@@ -805,6 +919,7 @@ async function executeToolInner(
       const order = await requireDraft(ctx, state);
       await cancelOrder(db, order.id, "ai", input.reason ? String(input.reason) : "customer changed mind");
       state.draftOrderId = null;
+      state.pendingItem = null;
       state.mutationSeq++;
       if (state.outcome !== "ORDER_COMPLETED") state.outcome = "CUSTOMER_CANCELLED";
       return { cancelled: true };

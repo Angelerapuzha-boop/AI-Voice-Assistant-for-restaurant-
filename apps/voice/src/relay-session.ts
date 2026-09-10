@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import {
   appendTranscript,
+  buildMenuCatalog,
   endCall,
   getDb,
   getDefaultRestaurant,
@@ -133,9 +134,10 @@ export class RelaySession {
 
     const db = getDb();
     const restaurant = await getDefaultRestaurant(db);
-    const [settings, hours] = await Promise.all([
+    const [settings, hours, menuCatalog] = await Promise.all([
       getSettings(db, restaurant.id),
       getHours(db, restaurant.id),
+      buildMenuCatalog(db, restaurant.id),
     ]);
     const call = await startCall(db, {
       restaurantId: restaurant.id,
@@ -169,6 +171,7 @@ export class RelaySession {
       callId: call.id,
       callerNumber: setup.from,
       now: this.deps.now ?? (() => new Date()),
+      menuCatalog,
     });
     // The welcome greeting is spoken by ConversationRelay itself
     // (welcomeGreeting attribute); record it in the transcript.
@@ -212,15 +215,15 @@ export class RelaySession {
     const turnStarted = Date.now();
     let firstTokenMs: number | null = null;
     let fillerSent = false;
-    // Dead-air breaker: if the model hasn't produced speech within 2s
-    // (e.g. it went straight into tool work), voice a tiny acknowledgment
-    // so the caller never sits in silence.
+    // Dead-air breaker: if no speech has been produced yet (fast paths
+    // answer well inside this; LLM turns doing tool work don't), voice a
+    // tiny neutral acknowledgment so the caller never sits in silence.
     const filler = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
         fillerSent = true;
         this.send({ type: "text", token: "Righto, ", last: false });
       }
-    }, 1500);
+    }, 900);
     const result = await this.agent.handleTurn(
       text,
       {
@@ -246,6 +249,8 @@ export class RelaySession {
         fillerSent,
         toolCalls: result.toolCalls.length,
         interrupted: result.interrupted,
+        fastPath: result.fastPath ?? null,
+        assistantWords: result.text ? result.text.trim().split(/\s+/).length : 0,
       });
     }
 

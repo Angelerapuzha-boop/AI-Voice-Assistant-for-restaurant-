@@ -172,11 +172,16 @@ describe("agent engine + tools", () => {
     ]);
     const agent = new OrderAgent(llm, agentCtx());
     await agent.handleTurn("lamb pide to eat in, name's Sam");
+    // The read-back ended with "Correct?", so the final "yes" is handled by
+    // the deterministic fast path — no LLM round-trip.
     const turn2 = await agent.handleTurn("yes");
-    const confirm = turn2.toolCalls.find((c) => c.name === "confirm_order");
+    expect(turn2.fastPath).toBe("confirm_yes");
+    expect(turn2.endCall).toBe(true);
+    const confirm = turn2.toolCalls.find((c) => c.name === "fast:confirm_order");
     expect(confirm!.result.confirmed).toBe(true);
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.orderType).toBe("dine_in");
+    expect(order!.status).toBe("new");
   });
 
   it("recovers politely when the LLM fails, and gives up after two failures (scenario 9)", async () => {

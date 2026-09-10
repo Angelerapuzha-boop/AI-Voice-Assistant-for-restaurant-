@@ -6,6 +6,7 @@ import {
   type AgentContext,
   type AgentState,
 } from "./tools";
+import { tryFastPath } from "./fastpath";
 import type { Llm, LlmMessage } from "./llm";
 
 export interface ToolCallRecord {
@@ -26,6 +27,8 @@ export interface AgentTurnResult {
   endCall: boolean;
   interrupted: boolean;
   error?: string;
+  /** Set when the deterministic layer answered without the LLM. */
+  fastPath?: string;
 }
 
 const MAX_TOOL_ITERATIONS = 10;
@@ -54,6 +57,7 @@ export class OrderAgent {
       hours: ctx.hours,
       callerNumber: ctx.callerNumber,
       now: ctx.now(),
+      menuCatalog: ctx.menuCatalog,
     });
   }
 
@@ -67,6 +71,35 @@ export class OrderAgent {
     signal?: AbortSignal,
   ): Promise<AgentTurnResult> {
     const system = this.system;
+
+    // Deterministic dialogue control first: predictable turns (option
+    // answers, "nah that's it", the final "yep") answer in milliseconds
+    // and never touch the LLM. Anything ambiguous falls through.
+    try {
+      const fast = await tryFastPath(this.ctx, this.state, userText);
+      if (fast.handled) {
+        this.messages.push({ role: "user", content: userText });
+        if (fast.say) {
+          handlers.onText?.(fast.say);
+          this.messages.push({
+            role: "assistant",
+            content: [{ type: "text", text: fast.say }],
+          });
+          this.state.lastAssistantText = fast.say;
+        }
+        for (const call of fast.toolCalls ?? []) handlers.onToolCall?.(call);
+        return {
+          text: fast.say ?? "",
+          toolCalls: fast.toolCalls ?? [],
+          endCall: this.state.endCallRequested,
+          interrupted: false,
+          fastPath: fast.kind,
+        };
+      }
+    } catch (err) {
+      // A fast-path failure must never take the call down — fall through.
+      console.error("[fastpath] failed, falling back to LLM:", err);
+    }
 
     this.messages.push({ role: "user", content: userText });
 
@@ -111,6 +144,7 @@ export class OrderAgent {
         if (pendingTools.length === 0) {
           if (blocks.length > 0) this.messages.push({ role: "assistant", content: blocks });
           this.consecutiveFailures = 0;
+          this.state.lastAssistantText = spokenText;
           return { text: spokenText, toolCalls, endCall: this.state.endCallRequested, interrupted: false };
         }
 
@@ -132,6 +166,7 @@ export class OrderAgent {
         if (this.state.endCallRequested) {
           // Goodbye was spoken before end_call; no further LLM round needed.
           this.consecutiveFailures = 0;
+          this.state.lastAssistantText = spokenText;
           return { text: spokenText, toolCalls, endCall: true, interrupted: false };
         }
       }
@@ -141,6 +176,7 @@ export class OrderAgent {
         role: "assistant",
         content: [{ type: "text", text: "Sorry, let me just double-check that for you." }],
       });
+      this.state.lastAssistantText = spokenText || "Sorry, let me just double-check that for you.";
       return {
         text: spokenText || "Sorry, let me just double-check that for you.",
         toolCalls,
@@ -155,6 +191,7 @@ export class OrderAgent {
         } else {
           this.messages.pop(); // nothing said; drop the dangling structure
         }
+        this.state.lastAssistantText = spokenText;
         return { text: spokenText, toolCalls, endCall: false, interrupted: true };
       }
       this.consecutiveFailures++;
@@ -167,6 +204,7 @@ export class OrderAgent {
         this.consecutiveFailures >= 2
           ? "Sorry, I'm having trouble on my end right now. Could you call us back in a few minutes? Sorry about that."
           : "Sorry, I missed that — could you say it again?";
+      this.state.lastAssistantText = message;
       return {
         text: message,
         toolCalls,

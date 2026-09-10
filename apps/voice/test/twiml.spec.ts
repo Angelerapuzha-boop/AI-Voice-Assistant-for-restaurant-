@@ -9,6 +9,8 @@ const settings: RestaurantSettings = {
   complexBaselineSeconds: 1200,
   acceptingOrders: true,
   pauseReason: "",
+  reviewTtlSeconds: 1800,
+  delayNotifyThresholdSeconds: 600,
   ownerSmsNumber: "",
   customerSmsEnabled: false,
   futureOrdersEnabled: true,

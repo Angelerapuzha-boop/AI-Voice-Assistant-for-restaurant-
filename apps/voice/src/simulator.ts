@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   appendTranscript,
+  buildMenuCatalog,
   endCall,
   getDb,
   getDefaultRestaurant,
@@ -46,6 +47,7 @@ export async function createSimulatorSession(createLlm: (model?: string) => Llm)
     getSettings(db, restaurant.id),
     getHours(db, restaurant.id),
   ]);
+  const menuCatalog = await buildMenuCatalog(db, restaurant.id);
   const llm = createLlm(settings.aiModel || undefined); // throws if no API key
   const call = await startCall(db, {
     restaurantId: restaurant.id,
@@ -60,6 +62,7 @@ export async function createSimulatorSession(createLlm: (model?: string) => Llm)
     callId: call.id,
     callerNumber: undefined, // simulator has no caller ID — agent should ask
     now: () => new Date(),
+    menuCatalog,
   });
   const sessionId = crypto.randomUUID();
   sessions.set(sessionId, { agent, callId: call.id, createdAt: Date.now() });

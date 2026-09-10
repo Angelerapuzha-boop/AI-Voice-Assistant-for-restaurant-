@@ -20,6 +20,7 @@ const NAV = [
   { href: "/admin/integrations", label: "Integrations" },
   { href: "/admin/simulator", label: "Test AI" },
   { href: "/admin/calls", label: "Call logs" },
+  { href: "/admin/voice-quality", label: "Voice quality" },
   { href: "/admin/analytics", label: "Analytics" },
   { href: "/admin/users", label: "Users" },
 ];
