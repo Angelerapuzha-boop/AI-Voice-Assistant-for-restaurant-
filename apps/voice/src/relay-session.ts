@@ -195,7 +195,7 @@ export class RelaySession {
       this.pendingText = "";
       this.pendingTimer = null;
       if (merged) this.enqueueTurn(merged);
-    }, 400);
+    }, 250);
   }
 
   /** Serialise turns — a new final prompt aborts a stale in-flight turn. */
@@ -218,15 +218,22 @@ export class RelaySession {
     const turnStarted = Date.now();
     let firstTokenMs: number | null = null;
     let fillerSent = false;
-    // Dead-air breaker: if no speech has been produced yet (fast paths
-    // answer well inside this; LLM turns doing tool work don't), voice a
-    // tiny neutral acknowledgment so the caller never sits in silence.
+    // Dead-air breaker for genuinely long waits only. With the fast model
+    // most turns speak well before this fires; a filler on every turn is a
+    // verbal tic that wrecks the feel (learned from Kevin's real call).
     const filler = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
         fillerSent = true;
         this.send({ type: "text", token: "Righto, ", last: false });
       }
-    }, 900);
+    }, 1600);
+    // Second stage for rare tool-heavy turns: never leave the caller in
+    // long silence after the first ack.
+    const filler2 = setTimeout(() => {
+      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+        this.send({ type: "text", token: "just getting that in for you. ", last: false });
+      }
+    }, 5500);
     const result = await this.agent.handleTurn(
       text,
       {
@@ -234,6 +241,7 @@ export class RelaySession {
           if (firstTokenMs === null) {
             firstTokenMs = Date.now() - turnStarted;
             clearTimeout(filler);
+            clearTimeout(filler2);
           }
           this.send({ type: "text", token, last: false });
         },
@@ -241,6 +249,7 @@ export class RelaySession {
       this.abort.signal,
     );
     clearTimeout(filler);
+    clearTimeout(filler2);
     this.send({ type: "text", token: "", last: true });
     const turnMs = Date.now() - turnStarted;
     if (this.callId) {

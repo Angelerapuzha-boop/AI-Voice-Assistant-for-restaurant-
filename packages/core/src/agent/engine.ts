@@ -71,6 +71,7 @@ export class OrderAgent {
     signal?: AbortSignal,
   ): Promise<AgentTurnResult> {
     const system = this.system;
+    this.state.currentCallerText = userText;
 
     // Deterministic dialogue control first: predictable turns (option
     // answers, "nah that's it", the final "yep") answer in milliseconds

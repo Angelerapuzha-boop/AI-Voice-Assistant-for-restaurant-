@@ -81,7 +81,10 @@ export function createAnthropicLlm(model?: string): Llm {
       } as Parameters<typeof client.messages.stream>[0];
       // Low effort: phone ordering is simple and latency-critical — this
       // keeps Sonnet's instruction-following while answering much faster.
-      (request as unknown as Record<string, unknown>).output_config = { effort: "low" };
+      // Haiku 4.5 does not support the effort parameter (400s on it).
+      if (!useModel.includes("haiku")) {
+        (request as unknown as Record<string, unknown>).output_config = { effort: "low" };
+      }
       const stream = client.messages.stream(request, { signal: params.signal });
 
       // Track tool_use blocks so we can emit them complete.

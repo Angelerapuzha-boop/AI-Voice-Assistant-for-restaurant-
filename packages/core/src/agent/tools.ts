@@ -28,6 +28,7 @@ import { getLastOrderForPhone, isUsablePhone } from "../domain/customers";
 import { enqueueNotification, formatLocalTime } from "../domain/notifications";
 import { speakEta } from "../domain/eta";
 import { resolveMenuItemByName, resolveModifierNames } from "./catalog";
+import { isYes } from "./speech";
 import { env } from "../env";
 import type {
   CallOutcome,
@@ -67,6 +68,11 @@ export interface AgentState {
    */
   lastAssistantText: string;
   /**
+   * The caller's CURRENT utterance (set by the engine each turn). The
+   * confirm_order hard guard requires it to be an explicit yes.
+   */
+  currentCallerText: string;
+  /**
    * An add_order_item that failed on a missing REQUIRED option; the fast
    * path completes it from the caller's short answer without the LLM.
    */
@@ -89,6 +95,7 @@ export function initialAgentState(): AgentState {
     endCallRequested: false,
     outcome: "NO_ORDER",
     lastAssistantText: "",
+    currentCallerText: "",
     pendingItem: null,
   };
 }
@@ -875,6 +882,15 @@ async function executeToolInner(
         return {
           error:
             "The order changed since you last read it back. Call get_order_summary, read it to the customer, and get an explicit yes before confirming.",
+        };
+      }
+      // HARD guard, model-independent: the caller's own current utterance
+      // must be an explicit yes. A model can never talk itself into
+      // confirming ("Correct? ... Done!") without the customer agreeing.
+      if (state.currentCallerText && !isYes(state.currentCallerText)) {
+        return {
+          error:
+            "The caller has not said yes in their latest utterance. Read the order back, then WAIT for their explicit yes before calling confirm_order.",
         };
       }
       const result = await confirmOrderWithNotifications(db, {
