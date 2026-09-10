@@ -51,7 +51,10 @@ export function conversationRelayTwiml(params: {
     dtmfDetection: "false",
   };
   if (settings.sttModel) attrs.speechModel = settings.sttModel;
-  if (hints) attrs.hints = hints;
+  // Google's en-AU telephony speech model rejects the hints attribute with
+  // error 64101, which makes EVERY call fail busy (2026-09-10 incident).
+  // Only send hints to providers that accept them.
+  if (hints && sttProvider.toLowerCase() !== "google") attrs.hints = hints;
 
   const attrString = Object.entries(attrs)
     .map(([k, v]) => `${k}="${xmlEscape(v)}"`)
