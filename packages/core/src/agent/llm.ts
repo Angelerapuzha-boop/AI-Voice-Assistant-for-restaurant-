@@ -66,22 +66,23 @@ export function createAnthropicLlm(model?: string): Llm {
         return { ...m, content: blocks } as unknown as Anthropic.MessageParam;
       });
 
-      const stream = client.messages.stream(
-        {
-          model: useModel,
-          max_tokens: params.maxTokens ?? 1024,
-          system: [
-            {
-              type: "text",
-              text: params.system,
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-          messages: prepared,
-          tools,
-        },
-        { signal: params.signal },
-      );
+      const request = {
+        model: useModel,
+        max_tokens: params.maxTokens ?? 1024,
+        system: [
+          {
+            type: "text",
+            text: params.system,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: prepared,
+        tools,
+      } as Parameters<typeof client.messages.stream>[0];
+      // Low effort: phone ordering is simple and latency-critical — this
+      // keeps Sonnet's instruction-following while answering much faster.
+      (request as unknown as Record<string, unknown>).output_config = { effort: "low" };
+      const stream = client.messages.stream(request, { signal: params.signal });
 
       // Track tool_use blocks so we can emit them complete.
       const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
