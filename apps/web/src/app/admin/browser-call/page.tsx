@@ -83,7 +83,47 @@ export default function BrowserCallPage() {
   async function startCall() {
     const device = deviceRef.current;
     if (!device) return;
-    setStatus("Requesting microphone…");
+    setStatus("Checking microphone…");
+
+    // Preflight the mic ourselves so failures get a PRECISE message
+    // instead of a generic SDK error.
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus(
+          "This browser can't access microphones here. Use Chrome/Edge/Safari over HTTPS (this exact URL), not an in-app browser.",
+        );
+        return;
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      if (!devices.some((d) => d.kind === "audioinput")) {
+        setStatus(
+          "No microphone found on this device. Easiest fix: open this same page on your PHONE's browser and call from there — or plug a headset into this computer.",
+        );
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop()); // release; the SDK takes over
+    } catch (err) {
+      const name = (err as { name?: string }).name ?? "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        setStatus(
+          "Microphone is BLOCKED for this site. Click the padlock/tune icon next to the address bar → Site settings → Microphone → Allow, then reload this page. (On Windows also check Settings → Privacy & security → Microphone → let desktop apps access.)",
+        );
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        setStatus(
+          "No working microphone found. Open this page on your phone's browser instead, or plug in a headset.",
+        );
+      } else if (name === "NotReadableError" || name === "TrackStartError") {
+        setStatus(
+          "The microphone is busy in another app (Teams/WhatsApp/recorder?). Close it and try again.",
+        );
+      } else {
+        setStatus(`Microphone check failed: ${name || (err as Error).message}`);
+      }
+      return;
+    }
+
+    setStatus("Mic OK — connecting the call…");
     try {
       const call = await device.connect({});
       callRef.current = call;
@@ -99,12 +139,15 @@ export default function BrowserCallPage() {
         setStatus("Call ended. Check the kitchen board and Voice quality page.");
       });
       call.on("error", (err) => {
-        const e = err as { message?: string };
-        setStatus(`Call error: ${e?.message ?? "unknown"}`);
+        const e = err as { message?: string; code?: number };
+        setStatus(`Call error ${e?.code ?? ""}: ${e?.message ?? "unknown"}`);
         setInCall(false);
       });
     } catch (err) {
-      setStatus(`Couldn't start the call: ${(err as Error).message} (allow the microphone?)`);
+      const e = err as { message?: string; code?: number };
+      setStatus(
+        `Couldn't start the call${e?.code ? ` (Twilio ${e.code})` : ""}: ${e?.message ?? "unknown"}. If this mentions websocket/network, your network may block internet calling (try a phone hotspot).`,
+      );
     }
   }
 
