@@ -97,6 +97,34 @@ app.post("/twilio/voice", async (req, reply) => {
   }
 });
 
+app.post("/twilio/sms-status", async (req, reply) => {
+  const params = (req.body ?? {}) as Record<string, string>;
+  if (env.TWILIO_AUTH_TOKEN) {
+    const ok = validateTwilioSignature(
+      env.TWILIO_AUTH_TOKEN,
+      req.headers["x-twilio-signature"] as string | undefined,
+      publicUrl("/twilio/sms-status"),
+      params,
+    );
+    if (!ok) return reply.code(403).send("forbidden");
+  }
+  const sid = params.MessageSid ?? params.SmsSid;
+  const status = params.MessageStatus ?? params.SmsStatus ?? "";
+  if (sid && status) {
+    // Idempotent: repeated/out-of-order callbacks just re-write the field;
+    // delivered_at is only ever set once.
+    await getDb().query(
+      `UPDATE notification_attempts
+       SET delivery_status = $2,
+           delivered_at = CASE WHEN $2 = 'delivered' AND delivered_at IS NULL THEN now() ELSE delivered_at END,
+           last_error = CASE WHEN $3 <> '' THEN 'twilio error ' || $3 ELSE last_error END
+       WHERE provider_sid = $1`,
+      [sid, status, params.ErrorCode ?? ""],
+    );
+  }
+  return "ok";
+});
+
 app.post("/twilio/status", async (req) => {
   // Call status callbacks are informational; call rows are finalised by the
   // relay session itself. Log for observability.

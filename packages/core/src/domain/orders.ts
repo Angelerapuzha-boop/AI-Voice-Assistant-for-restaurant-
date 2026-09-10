@@ -484,6 +484,35 @@ export async function confirmOrder(
     if ((itemsCount.rows[0] as { n: number }).n === 0) {
       throw new OrderValidationError("ORDER_EMPTY", "The order has no items yet.");
     }
+
+    // Recheck at the moment of commitment (spec: availability and ordering
+    // pause can change mid-call; commit must refuse, never silently accept).
+    const pauseRes = await tx.query(
+      `SELECT accepting_orders, pause_reason FROM restaurant_settings WHERE restaurant_id = $1`,
+      [order.restaurantId],
+    );
+    const pause = pauseRes.rows[0] as
+      | { accepting_orders: boolean; pause_reason: string }
+      | undefined;
+    if (pause && !pause.accepting_orders) {
+      throw new OrderValidationError(
+        "ORDERS_PAUSED",
+        `We're not taking orders right now${pause.pause_reason ? ` — ${pause.pause_reason}` : ""}. Apologise and don't confirm.`,
+      );
+    }
+    const unavailable = await tx.query(
+      `SELECT DISTINCT mi.name FROM order_items oi
+       JOIN menu_items mi ON mi.id = oi.menu_item_id
+       WHERE oi.order_id = $1 AND (mi.is_sold_out OR NOT mi.is_available OR NOT mi.active)`,
+      [params.orderId],
+    );
+    if (unavailable.rows.length > 0) {
+      const names = unavailable.rows.map((r) => (r as { name: string }).name).join(", ");
+      throw new OrderValidationError(
+        "ITEM_UNAVAILABLE_AT_CONFIRM",
+        `${names} just sold out — remove or replace it, re-read the order, then confirm.`,
+      );
+    }
     if (!order.customerName.trim()) {
       throw new OrderValidationError(
         "NAME_REQUIRED",

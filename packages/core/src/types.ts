@@ -31,6 +31,8 @@ export interface RestaurantSettings {
   kitchenCapacity: number;
   simpleBaselineSeconds: number;
   complexBaselineSeconds: number;
+  acceptingOrders: boolean;
+  pauseReason: string;
   ownerSmsNumber: string;
   customerSmsEnabled: boolean;
   futureOrdersEnabled: boolean;

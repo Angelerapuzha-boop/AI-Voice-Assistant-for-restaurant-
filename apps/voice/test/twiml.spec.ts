@@ -7,6 +7,8 @@ const settings: RestaurantSettings = {
   kitchenCapacity: 3,
   simpleBaselineSeconds: 600,
   complexBaselineSeconds: 1200,
+  acceptingOrders: true,
+  pauseReason: "",
   ownerSmsNumber: "",
   customerSmsEnabled: false,
   futureOrdersEnabled: true,

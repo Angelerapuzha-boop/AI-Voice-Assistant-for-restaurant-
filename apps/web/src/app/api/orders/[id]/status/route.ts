@@ -4,6 +4,7 @@ import {
   getDefaultRestaurant,
   getSettings,
   isUsablePhone,
+  recalcQueueEstimates,
   updateOrderStatus,
   OrderValidationError,
   type OrderStatus,
@@ -22,11 +23,11 @@ export const POST = guarded(async (req: Request, ctx: { params: Promise<{ id: st
   if (!parsed.success) return Response.json({ error: "invalid status" }, { status: 400 });
   try {
     const order = await updateOrderStatus(db(), id, parsed.data.status as OrderStatus, user.email);
+    const restaurant = await getDefaultRestaurant(db());
+    const settings = await getSettings(db(), restaurant.id);
     // Ready notification (deduplicated: only on the transition into READY,
     // which the status flow permits at most once per order).
     if (parsed.data.status === "ready" && order.source === "phone" && isUsablePhone(order.customerPhone)) {
-      const restaurant = await getDefaultRestaurant(db());
-      const settings = await getSettings(db(), restaurant.id);
       if (settings.customerSmsEnabled) {
         await enqueueNotification(db(), {
           orderId: order.id,
@@ -35,6 +36,11 @@ export const POST = guarded(async (req: Request, ctx: { params: Promise<{ id: st
           body: `Your ${restaurant.name} order #${order.publicOrderNumber} is ready for collection.`,
         });
       }
+    }
+    // Kitchen state changed: refresh queued orders' current estimates
+    // (first promises stay untouched).
+    if (["preparing", "ready", "completed", "cancelled"].includes(parsed.data.status)) {
+      await recalcQueueEstimates(db(), { restaurantId: restaurant.id, settings });
     }
     return Response.json({ order });
   } catch (err) {

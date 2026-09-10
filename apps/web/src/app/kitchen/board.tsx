@@ -178,7 +178,17 @@ export default function KitchenBoard() {
                     {order.status.replace("_", " ")}
                   </span>
                   <p className="mt-1 text-xs text-stone-500">
-                    {mins} min ago · pickup {pickupLabel(order)}
+                    {mins} min ago · pickup{" "}
+                    <span
+                      className={
+                        order.currentEstimatedReadyAt &&
+                        Date.now() > new Date(order.currentEstimatedReadyAt).getTime()
+                          ? "font-bold text-red-600"
+                          : ""
+                      }
+                    >
+                      {pickupLabel(order)}
+                    </span>
                   </p>
                 </div>
               </div>

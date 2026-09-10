@@ -123,6 +123,11 @@ export function createSmsSender(): SmsSender {
   }
   return {
     async send(to: string, body: string) {
+      const params: Record<string, string> = { To: to, From: from, Body: body };
+      // Delivery-status callbacks (queued/sent/delivered are not synonyms).
+      if (env.VOICE_PUBLIC_URL.startsWith("https")) {
+        params.StatusCallback = `${env.VOICE_PUBLIC_URL.replace(/\/$/, "")}/twilio/sms-status`;
+      }
       const res = await fetch(
         `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
         {
@@ -131,7 +136,7 @@ export function createSmsSender(): SmsSender {
             Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`,
             "Content-Type": "application/x-www-form-urlencoded",
           },
-          body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
+          body: new URLSearchParams(params).toString(),
         },
       );
       if (!res.ok) {

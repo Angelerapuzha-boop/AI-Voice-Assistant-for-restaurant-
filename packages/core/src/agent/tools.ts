@@ -24,8 +24,9 @@ import {
 import { confirmOrderWithNotifications } from "../domain/flow";
 import { linkCallOrder } from "../domain/calls";
 import { getLastOrderForPhone, isUsablePhone } from "../domain/customers";
-import { formatLocalTime } from "../domain/notifications";
+import { enqueueNotification, formatLocalTime } from "../domain/notifications";
 import { speakEta } from "../domain/eta";
+import { env } from "../env";
 import type {
   CallOutcome,
   ModifierGroupWithModifiers,
@@ -139,6 +140,18 @@ export const TOOL_DEFS: LlmToolDef[] = [
   {
     name: "get_daily_specials",
     description: "Today's active specials. Always call this before mentioning any special.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "send_menu_link",
+    description:
+      "Text the caller a link to the menu website (their caller ID number only). Offer it instead of reciting the menu.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_current_order_status",
+    description:
+      "Status and ready estimate of the caller's most recent order (matched by caller ID). Use when they ask where their order is.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -378,6 +391,12 @@ async function executeToolInner(
       const s = openStateAt(hours, now, restaurant.timezone);
       return {
         open: s.open,
+        acceptingOrders: settings.acceptingOrders,
+        ...(settings.acceptingOrders
+          ? {}
+          : {
+              pausedNote: `Ordering is paused right now${settings.pauseReason ? `: ${settings.pauseReason}` : ""} — apologise, don't take an order.`,
+            }),
         todayHours: s.todayWindow,
         minutesUntilClose: s.minutesUntilClose,
         localTime: new Intl.DateTimeFormat("en-AU", {
@@ -387,6 +406,40 @@ async function executeToolInner(
           hour12: true,
         }).format(now),
         futureOrdersEnabled: settings.futureOrdersEnabled,
+      };
+    }
+
+    case "send_menu_link": {
+      if (!isUsablePhone(ctx.callerNumber)) {
+        return { error: "No caller ID on this line — mention the website instead: " + env.APP_URL };
+      }
+      await enqueueNotification(db, {
+        orderId: state.draftOrderId,
+        kind: "customer_sms",
+        toNumber: ctx.callerNumber,
+        body: `${restaurant.name} menu: ${env.APP_URL} — call ${restaurant.phoneDisplay} to order.`,
+      });
+      return { ok: true, note: "Say a text with the menu is on its way (not that it has arrived)." };
+    }
+
+    case "get_current_order_status": {
+      if (!isUsablePhone(ctx.callerNumber)) {
+        return { error: "No caller ID — ask for their order number and tell them staff can check at the shop." };
+      }
+      const candidate = await getLastOrderForPhone(db, restaurant.id, ctx.callerNumber);
+      if (!candidate) return { found: false, note: "No order found for this number." };
+      const o = candidate.order;
+      return {
+        found: true,
+        orderNumber: o.publicOrderNumber,
+        status: o.status,
+        readyEstimate:
+          o.status === "ready"
+            ? "ready for collection now"
+            : o.currentEstimatedReadyAt
+              ? `${speakEta(o.currentEstimatedReadyAt, now)} (around ${formatLocalTime(o.currentEstimatedReadyAt, restaurant.timezone)})`
+              : null,
+        note: "Only say it's ready if status is 'ready'.",
       };
     }
 
@@ -538,6 +591,11 @@ async function executeToolInner(
     }
 
     case "create_order_draft": {
+      if (!settings.acceptingOrders) {
+        return {
+          error: `Ordering is paused right now${settings.pauseReason ? `: ${settings.pauseReason}` : ""} — apologise and don't take an order.`,
+        };
+      }
       if (state.draftOrderId) {
         const existing = await getOrderWithItems(db, state.draftOrderId);
         if (existing && existing.status === "draft") {

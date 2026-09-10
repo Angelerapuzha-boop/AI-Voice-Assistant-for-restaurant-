@@ -18,6 +18,20 @@ const FIELDS: FieldDef[] = [
     type: "boolean",
     source: "settings",
   },
+  {
+    key: "acceptingOrders",
+    label: "Accepting phone orders",
+    type: "boolean",
+    hint: "Turn OFF to pause the AI taking orders (it still answers and explains)",
+    source: "settings",
+  },
+  {
+    key: "pauseReason",
+    label: "Pause reason (told to callers while paused)",
+    type: "text",
+    hint: "e.g. kitchen at capacity — try again in 30 minutes",
+    source: "settings",
+  },
   { key: "futureOrdersEnabled", label: "Allow orders for later", type: "boolean", source: "settings" },
   {
     key: "minPrepMinutes",
