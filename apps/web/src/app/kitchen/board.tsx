@@ -63,17 +63,9 @@ export default function KitchenBoard() {
   }, []);
 
   const refetch = useCallback(async () => {
-    const res = await fetch("/api/orders?status=active", { cache: "no-store" });
+    const res = await fetch("/api/orders?status=active&include=items", { cache: "no-store" });
     if (!res.ok) return;
-    const body = (await res.json()) as { orders: Order[] };
-    const detailed = await Promise.all(
-      body.orders.map(async (o) => {
-        const d = await fetch(`/api/orders/${o.id}`, { cache: "no-store" });
-        if (!d.ok) return null;
-        return ((await d.json()) as { order: FullOrder }).order;
-      }),
-    );
-    const list = detailed.filter((o): o is FullOrder => o !== null);
+    const list = ((await res.json()) as { orders: FullOrder[] }).orders;
     const fresh = list.filter((o) => o.status === "new" && !knownIds.current.has(o.id));
     if (knownIds.current.size > 0 && fresh.length > 0) beep();
     for (const o of list) knownIds.current.add(o.id);
@@ -85,12 +77,18 @@ export default function KitchenBoard() {
     const es = new EventSource("/api/orders/stream");
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
-    es.onmessage = () => void refetch();
+    // Debounce bursts (a confirm fires several DB events in a row).
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    es.onmessage = () => {
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(() => void refetch(), 300);
+    };
     // Fallback poll (SSE can silently die behind some proxies) + age ticker
     const poll = setInterval(() => void refetch(), 30000);
     const tick = setInterval(() => forceTick((n) => n + 1), 15000);
     return () => {
       es.close();
+      if (pending) clearTimeout(pending);
       clearInterval(poll);
       clearInterval(tick);
     };

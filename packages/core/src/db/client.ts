@@ -18,7 +18,9 @@ export function getDb(): pg.Pool {
 export function createPool(connectionString: string): pg.Pool {
   const p = new Pool({
     connectionString,
-    max: 10,
+    // Headroom for call bursts + SMS worker + dashboards (a max of 10
+    // caused pool exhaustion on a sibling project under parallel load).
+    max: 25,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
