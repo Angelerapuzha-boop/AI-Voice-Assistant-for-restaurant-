@@ -52,6 +52,10 @@ export class RelaySession {
   private turnQueue: Promise<void> = Promise.resolve();
   private closed = false;
   private consecutiveMisses = 0;
+  // STT often chops one caller sentence into several final prompts;
+  // merge fragments arriving within a short quiet window into one turn.
+  private pendingText = "";
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly ws: WebSocket,
@@ -92,7 +96,7 @@ export class RelaySession {
         const text = String(msg.voicePrompt ?? "");
         const last = msg.last !== false;
         if (last && text.trim()) {
-          this.enqueueTurn(text.trim());
+          this.queueFinal(text.trim());
         }
         break;
       }
@@ -175,9 +179,21 @@ export class RelaySession {
     });
   }
 
+  /** Merge rapid-fire STT finals into one caller turn (600ms quiet window). */
+  private queueFinal(text: string): void {
+    this.abort?.abort(); // new speech supersedes any in-flight reply
+    this.pendingText = this.pendingText ? `${this.pendingText} ${text}` : text;
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = setTimeout(() => {
+      const merged = this.pendingText.trim();
+      this.pendingText = "";
+      this.pendingTimer = null;
+      if (merged) this.enqueueTurn(merged);
+    }, 600);
+  }
+
   /** Serialise turns — a new final prompt aborts a stale in-flight turn. */
   private enqueueTurn(text: string): void {
-    this.abort?.abort();
     this.turnQueue = this.turnQueue.then(() => this.runTurn(text)).catch(() => undefined);
   }
 
@@ -287,6 +303,7 @@ export class RelaySession {
 
   private async onClose(): Promise<void> {
     this.abort?.abort();
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
     await this.finalise();
   }
 }
