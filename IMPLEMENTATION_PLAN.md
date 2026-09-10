@@ -31,7 +31,13 @@ the core ordering loop works").
 | Overnight hours, closed-kitchen refusal, future-order window | ✅ | `hours.ts` + guards + tests |
 | Allergen honesty, no bookings (no tool exists), prompt-injection scoping | ✅ | prompt + structural |
 | Watchdog self-healing processes, crash guards, health endpoints | ✅ | `infra/serve-meatbox.ps1`, fatal guards |
-| Conversation evaluations (spec §17 list) | ✅ | 69 core + 11 voice tests cover 1–14 in essence |
+| Pause ordering switch (accepting_orders + reason) | ✅ | migration 0005, agent + commit guard, Settings |
+| Availability/pause recheck inside the commit transaction | ✅ | `confirmOrder` + gaps.spec |
+| send_menu_link / get_current_order_status tools | ✅ | `agent/tools.ts` (caller-ID scoped) |
+| Queue re-estimation on kitchen changes; overdue display | ✅ | `recalcQueueEstimates` + status route + kitchen |
+| SMS delivery-status callbacks (queued ≠ sent ≠ delivered) | ✅ | `/twilio/sms-status`, delivery_status columns |
+| /customers screen with repeat-history privacy toggle | ✅ | `/admin/customers` |
+| Conversation evaluations (spec §17 list) | ✅ | 86 tests (75 core + 11 voice) cover 1–14 in essence |
 
 ## Adapted (🟡) — documented deviations
 
@@ -45,8 +51,8 @@ the core ordering loop works").
   confirmation only. Tracking page is read-only (no Confirm button ever).
 - **Demo isolation (is_demo)** → simulator orders are real rows in the dev
   database and are cancelled after each demo cycle (single-environment dev).
-- **Delay re-estimation / delay SMS with cooldown** → estimate stored per
-  order; automatic requote-on-delay deferred.
+- **Delay re-estimation** → current estimates now recalculate on kitchen
+  state changes; the throttled delay-SMS to customers remains deferred.
 
 ## Deferred (⏳) — Phase 3/4 per the master prompt's own sequencing
 
