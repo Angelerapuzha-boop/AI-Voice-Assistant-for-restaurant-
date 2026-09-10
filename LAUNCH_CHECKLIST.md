@@ -55,6 +55,27 @@ number at the system.
 - [ ] Voice service restart during idle: `/health` recovers, next call works
 - [ ] Verify Twilio signature validation is ON (a curl without the header → 403)
 
+## Collection & payments (Phase 3)
+
+- [ ] Decide the payments provider: leave `PAYMENTS_PROVIDER=mock_terminal`
+      (kiosk shows a purple TEST badge, no real money) until Square is ready —
+      never point real customers at the mock without the badge visible
+- [ ] Square live path: create the app at developer.squareup.com → set
+      SQUARE_APP_ID/SECRET → Admin → Integrations → Connect (owner clicks
+      Allow) → pair the Square Terminal and set SQUARE_TERMINAL_DEVICE_ID →
+      set SQUARE_WEBHOOK_SIGNATURE_KEY (webhook URL:
+      https://voice-syd.example.com/payments/webhook/square) →
+      switch PAYMENTS_PROVIDER=square_terminal → sandbox test checkout first
+- [ ] Kiosk drill on the shop tablet: order number + pickup code from the
+      tracking page → pay → PAID screen; wrong code five times → locked out
+      with the same generic message
+- [ ] Kitchen handover drill: COMPLETE an unpaid order — expect the
+      cash/card/exception chooser, and the payment to appear under
+      Admin → Payments
+- [ ] Refund drill: owner login → Admin → Payments → partial refund; verify
+      the audit entry and (for Square) the money actually returning
+- [ ] Put /board on the shop TV if wanted (public, order numbers only)
+
 ## Infrastructure
 
 - [ ] Verify database backups + a restore test

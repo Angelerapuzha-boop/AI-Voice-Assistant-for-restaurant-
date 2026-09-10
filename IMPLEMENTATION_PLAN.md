@@ -53,19 +53,38 @@ the core ordering loop works").
 - **Demo isolation (is_demo)** → simulator orders are real rows in the dev
   database and are cancelled after each demo cycle (single-environment dev).
 
-## Deferred (⏳) — Phase 3/4 per the master prompt's own sequencing
+## Phase 3 (spec §14) — ✅ built 2026-09-10
 
-- Collection kiosk, OTP pickup verification, `/collection` screen.
-- PaymentProvider interface + Stripe Terminal sandbox (POS records
-  cash/card/tap method today; Square order push exists for reporting).
+| Requirement | Status | Where |
+| --- | --- | --- |
+| PaymentProvider interface (initiate/status/cancel/refund/webhook) | ✅ | `payments.ts` |
+| Explicit test adapter, never silently substituted | ✅ | `MockTerminalProvider` + "TEST PAYMENTS" badge on the kiosk |
+| AU terminal adapter (existing POS dictates Square, not Stripe) | ✅ | `SquareTerminalProvider` (Terminal checkouts, refunds, signed webhooks) — inert until Square connect + device pairing |
+| Reconciled paid state: provider settlement or audited manual only | ✅ | `payments`/`refunds` ledger; `settlePayment` idempotent; POS writes ledger rows |
+| No concurrent duplicate attempts for one unpaid balance | ✅ | partial unique index `payments_one_pending_per_order` + FOR UPDATE |
+| Verified kiosk retrieval, no enumeration, rate-limited | ✅ | `collection.ts`: derived 4-digit pickup code (shown on the private track page), identical generic failures, 5/10-min limits per IP + order key |
+| Kiosk pay/track, session auto-clear, payment-pending honesty | ✅ | `/collection` (60s idle reset; polling asks the PROVIDER, browser never asserts success) |
+| Kiosk cannot mark collected; handover is staff + payment/exception | ✅ | `completeOrderWithPayment` — kitchen COMPLETE demands cash/card or audited owner exception |
+| Public ready board: order numbers only | ✅ | `/board` + `/api/board` |
+| Refunds: owner-only, audited, capped, provider-backed | ✅ | `/admin/payments` + `refundPayment` |
+
+Phase 3 tests in `test/payments.spec.ts` (17): pending-attempt uniqueness,
+idempotent/out-of-order settlement, decline/retry, manual payment supersede,
+handover gating + owner exception, POS ledger, refund caps, kiosk code
+verification/non-enumeration/rate limit, session tokens, board privacy.
+
+## Deferred (⏳) — Phase 4 per the master prompt's own sequencing
+
 - Ingredients, recipes, usage estimates, demand forecasting.
 - Multi-restaurant tenancy + per-device credentials.
 - OpenAPI document generation.
 
 ## Evidence
 
-`pnpm test` → 94 tests green (core 83, voice 11). Live verifications logged in
-git history: MB1014 (takeaway-first + spoken ETA), MB1013 (kitchen <2s),
+`pnpm test` → 111 tests green (core 100, voice 11). Live verifications logged
+in git history: MB1014 (takeaway-first + spoken ETA), MB1013 (kitchen <2s),
 MB1010 (real phone call), tracking SMS content asserted in `repeat.spec.ts`;
 visual-confirm commit/expiry/idempotency and delay-SMS cooldown in
-`review.spec.ts`.
+`review.spec.ts`; Phase 3 verified live 2026-09-10 (MB1024: kiosk lookup →
+mock terminal payment → paid → owner refund → kitchen cancel; wrong-code and
+unknown-order kiosk failures byte-identical; /api/board numbers only).
