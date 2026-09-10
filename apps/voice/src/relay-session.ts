@@ -195,16 +195,30 @@ export class RelaySession {
     this.abort = new AbortController();
     const turnStarted = Date.now();
     let firstTokenMs: number | null = null;
+    let fillerSent = false;
+    // Dead-air breaker: if the model hasn't produced speech within 2s
+    // (e.g. it went straight into tool work), voice a tiny acknowledgment
+    // so the caller never sits in silence.
+    const filler = setTimeout(() => {
+      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+        fillerSent = true;
+        this.send({ type: "text", token: "Righto, ", last: false });
+      }
+    }, 2000);
     const result = await this.agent.handleTurn(
       text,
       {
         onText: (token) => {
-          if (firstTokenMs === null) firstTokenMs = Date.now() - turnStarted;
+          if (firstTokenMs === null) {
+            firstTokenMs = Date.now() - turnStarted;
+            clearTimeout(filler);
+          }
           this.send({ type: "text", token, last: false });
         },
       },
       this.abort.signal,
     );
+    clearTimeout(filler);
     this.send({ type: "text", token: "", last: true });
     const turnMs = Date.now() - turnStarted;
     if (this.callId) {
@@ -213,6 +227,7 @@ export class RelaySession {
       await recordCallEvent(db, this.callId, turnMs > 8000 ? "slow_turn" : "turn_metrics", {
         turnMs,
         firstTokenMs,
+        fillerSent,
         toolCalls: result.toolCalls.length,
         interrupted: result.interrupted,
       });
