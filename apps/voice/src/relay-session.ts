@@ -193,14 +193,30 @@ export class RelaySession {
     }
 
     this.abort = new AbortController();
+    const turnStarted = Date.now();
+    let firstTokenMs: number | null = null;
     const result = await this.agent.handleTurn(
       text,
       {
-        onText: (token) => this.send({ type: "text", token, last: false }),
+        onText: (token) => {
+          if (firstTokenMs === null) firstTokenMs = Date.now() - turnStarted;
+          this.send({ type: "text", token, last: false });
+        },
       },
       this.abort.signal,
     );
     this.send({ type: "text", token: "", last: true });
+    const turnMs = Date.now() - turnStarted;
+    if (this.callId) {
+      // Permanent per-turn latency record; slow turns are flagged so call
+      // quality is auditable long after the call.
+      await recordCallEvent(db, this.callId, turnMs > 8000 ? "slow_turn" : "turn_metrics", {
+        turnMs,
+        firstTokenMs,
+        toolCalls: result.toolCalls.length,
+        interrupted: result.interrupted,
+      });
+    }
 
     if (this.callId) {
       if (result.text) {

@@ -8,17 +8,28 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+$logDir = Join-Path $repo 'logs'
+New-Item -ItemType Directory -Force $logDir | Out-Null
 
 function PortBusy([int]$port) {
     $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     return [bool]$conn
 }
 
+# Keep a log from growing unbounded: roll to .old at ~20 MB.
+function RollLog([string]$path) {
+    if ((Test-Path $path) -and ((Get-Item $path).Length -gt 20mb)) {
+        Move-Item -Force $path ($path + '.old')
+    }
+}
+
 switch ($App) {
     'voice' {
         if (PortBusy 4811) { exit 0 }
+        $log = Join-Path $logDir 'voice.log'
+        RollLog $log
         Set-Location (Join-Path $repo 'apps\voice')
-        & node 'node_modules\tsx\dist\cli.mjs' 'src\server.ts'
+        & node 'node_modules\tsx\dist\cli.mjs' 'src\server.ts' *>> $log
     }
     'web' {
         if (PortBusy 4810) { exit 0 }
@@ -27,12 +38,16 @@ switch ($App) {
             # No production build yet - refuse rather than silently run dev.
             throw 'No production build found. Run: pnpm --filter @meatbox/web build'
         }
-        & node 'node_modules\next\dist\bin\next' 'start' '-H' '127.0.0.1' '-p' '4810'
+        $log = Join-Path $logDir 'web.log'
+        RollLog $log
+        & node 'node_modules\next\dist\bin\next' 'start' '-H' '127.0.0.1' '-p' '4810' *>> $log
     }
     'tunnel' {
         $existing = Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" |
             Where-Object { $_.CommandLine -match 'meatbox' }
         if ($existing) { exit 0 }
-        & cloudflared tunnel --config (Join-Path $repo 'infra\cloudflared\config.yml') run meatbox-voice
+        $log = Join-Path $logDir 'tunnel.log'
+        RollLog $log
+        & cloudflared tunnel --config (Join-Path $repo 'infra\cloudflared\config.yml') run meatbox-voice *>> $log
     }
 }
