@@ -83,14 +83,20 @@ export default function KitchenBoard() {
       if (pending) clearTimeout(pending);
       pending = setTimeout(() => void refetch(), 300);
     };
-    // Fallback poll (SSE can silently die behind some proxies) + age ticker
-    const poll = setInterval(() => void refetch(), 30000);
+    // Safety net: even if SSE silently dies (proxy idle timeouts, tablet
+    // sleep), an order is never more than a few seconds late.
+    const poll = setInterval(() => void refetch(), 7000);
     const tick = setInterval(() => forceTick((n) => n + 1), 15000);
+    const onWake = () => {
+      if (document.visibilityState === "visible") void refetch();
+    };
+    document.addEventListener("visibilitychange", onWake);
     return () => {
       es.close();
       if (pending) clearTimeout(pending);
       clearInterval(poll);
       clearInterval(tick);
+      document.removeEventListener("visibilitychange", onWake);
     };
   }, [refetch]);
 
