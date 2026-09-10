@@ -30,7 +30,7 @@ const FIELDS: FieldDef[] = [
     key: "ttsVoice",
     label: "Voice name",
     type: "text",
-    hint: "An Australian voice from the chosen provider, e.g. en-AU-Neural2-A (Google) or Olivia (Amazon). Blank uses the server default.",
+    hint: "⚠ Must be a ConversationRelay-supported voice (an invalid name makes ALL calls fail busy — 2026-09-10 incident). ElevenLabs voice IDs work best for en-AU. ALWAYS place a test call immediately after changing this.",
     source: "settings",
   },
   { key: "ttsLanguage", label: "Language", type: "text", hint: "en-AU", source: "settings" },
