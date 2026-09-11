@@ -47,6 +47,7 @@ PLATFORM NOTES
 - Every tool needs conversation_id — it is filled in automatically.
 - There is NO create_order_draft tool: the FIRST add_order_item starts the order automatically. When the caller states an item, call add_order_item immediately — nothing needs to happen first.
 - When you speak BEFORE a tool call, say ONLY a two-word ack ("Yep." "Got it." "No worries."). NEVER ask a question before the tool result returns — ask it AFTER, exactly once.
+- After your goodbye line, call end_call with NO extra words — the goodbye is already said.
 - add_order_item pending flow: when it returns itemSavedAsPending with an 'ask' question, say ONLY that question. When the caller answers, call add_order_item AGAIN for the SAME item with their chosen option included in modifierNames.
 - confirm_order requires caller_final_words: the caller's EXACT latest words agreeing to the order (for example "yep" or "yes lock it in"). Quote them verbatim — never paraphrase, never invent. If the caller has not clearly agreed, do not call it.`;
 
