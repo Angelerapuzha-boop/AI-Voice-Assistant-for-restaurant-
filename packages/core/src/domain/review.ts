@@ -96,6 +96,8 @@ export async function confirmByReviewToken(
     restaurant: Restaurant;
     settings: RestaurantSettings;
     hours: RestaurantHoursRow[];
+    /** Injectable clock for the open-hours recheck (tests pin it). */
+    now?: Date;
   },
 ): Promise<{ order: OrderWithItems; alreadyConfirmed: boolean; trackUrl?: string }> {
   const lookup = await findOrderByReviewToken(db, params.token);
@@ -121,7 +123,10 @@ export async function confirmByReviewToken(
   }
   // Recheck hours at the moment of commitment: an ASAP order can't start
   // against a closed kitchen no matter when the link is tapped.
-  if (order.requestedAsap && !openStateAt(params.hours, new Date(), params.restaurant.timezone).open) {
+  if (
+    order.requestedAsap &&
+    !openStateAt(params.hours, params.now ?? new Date(), params.restaurant.timezone).open
+  ) {
     throw new OrderValidationError(
       "KITCHEN_CLOSED",
       "The kitchen has closed, so this order can't be confirmed. Please call us when we're open.",

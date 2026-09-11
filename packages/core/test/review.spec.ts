@@ -34,6 +34,11 @@ beforeEach(async () => {
 });
 
 const PHONE = "+61400000777";
+// Wednesday 7pm Perth — kitchen open (seed hours 17:00–01:00). Pinned so the
+// open-hours recheck inside confirmByReviewToken never depends on when the
+// suite happens to run.
+const KITCHEN_OPEN = new Date("2026-09-09T19:00:00+08:00");
+const KITCHEN_CLOSED = new Date("2026-09-09T10:00:00+08:00");
 
 async function reviewableDraft(name = "Vis") {
   const draft = await createDraft(db, {
@@ -108,6 +113,7 @@ describe("visual confirmation: review link", () => {
       restaurant: ctx.restaurant,
       settings: ctx.settings,
       hours: ctx.hours,
+      now: KITCHEN_OPEN,
     });
     expect(first.alreadyConfirmed).toBe(false);
     expect(first.order.status).toBe("new");
@@ -120,6 +126,7 @@ describe("visual confirmation: review link", () => {
       restaurant: ctx.restaurant,
       settings: ctx.settings,
       hours: ctx.hours,
+      now: KITCHEN_OPEN,
     });
     expect(again.alreadyConfirmed).toBe(true);
     expect(again.order.id).toBe(first.order.id);
@@ -156,6 +163,26 @@ describe("visual confirmation: review link", () => {
     await expect(
       confirmByReviewToken(db, { token, restaurant: ctx.restaurant, settings: ctx.settings, hours: ctx.hours }),
     ).rejects.toThrow(/expired or was cancelled/);
+  });
+
+  it("an ASAP order can't be confirmed against a closed kitchen, no matter when the link is tapped", async () => {
+    const order = await reviewableDraft();
+    const { url } = await createReviewLink(db, {
+      order,
+      restaurant: ctx.restaurant,
+      settings: ctx.settings,
+    });
+    await expect(
+      confirmByReviewToken(db, {
+        token: tokenFromUrl(url),
+        restaurant: ctx.restaurant,
+        settings: ctx.settings,
+        hours: ctx.hours,
+        now: KITCHEN_CLOSED,
+      }),
+    ).rejects.toThrow(/kitchen has closed/i);
+    const status = await db.query(`SELECT status FROM orders WHERE id = $1`, [order.id]);
+    expect((status.rows[0] as { status: string }).status).toBe("draft"); // never accepted
   });
 
   it("a nonsense token resolves to nothing", async () => {
