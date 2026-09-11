@@ -65,6 +65,20 @@ export function conversationRelayTwiml(params: {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Connect><ConversationRelay ${attrString} /></Connect></Response>`;
 }
 
+/**
+ * Hand the call to the ElevenLabs agent over SIP. The number stays fully
+ * on Twilio; if the SIP leg fails, the action URL falls back to the
+ * ConversationRelay stack so the restaurant line never goes dark.
+ */
+export function elevenLabsSipTwiml(params: { number: string; actionPath: string }): string {
+  const sipUri = `sip:${params.number}@sip.rtc.elevenlabs.io:5061;transport=tls`;
+  const auth =
+    env.ELEVENLABS_SIP_USERNAME && env.ELEVENLABS_SIP_PASSWORD
+      ? ` username="${xmlEscape(env.ELEVENLABS_SIP_USERNAME)}" password="${xmlEscape(env.ELEVENLABS_SIP_PASSWORD)}"`
+      : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlEscape(params.actionPath)}"><Sip${auth}>${xmlEscape(sipUri)}</Sip></Dial></Response>`;
+}
+
 /** Fallback TwiML when the AI can't take the call (e.g. missing API key). */
 export function unavailableTwiml(message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say language="en-AU">${xmlEscape(message)}</Say><Hangup/></Response>`;

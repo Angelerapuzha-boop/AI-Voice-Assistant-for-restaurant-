@@ -93,20 +93,16 @@ describe("tool webhooks", () => {
     const bridge = makeBridge();
     await bridge.handleInit({ conversation_id: "conv_order", caller_id: "+61400000001" });
 
-    const draft = await bridge.handleTool("create_order_draft", {
-      conversation_id: "conv_order",
-      orderType: "takeaway",
-    });
-    expect((draft.body as { orderId?: string }).orderId).toBeTruthy();
-
+    // No create_order_draft call: the first add auto-creates the draft.
     const add = await bridge.handleTool("add_order_item", {
       conversation_id: "conv_order",
       menuItemName: "Chicken Meatbox",
       modifierNames: ["Chips & Salad"],
       quantity: 1,
     });
-    const addBody = add.body as { lines?: unknown[]; error?: string };
+    const addBody = add.body as { lines?: unknown[]; error?: string; orderId?: string };
     expect(addBody.error).toBeUndefined();
+    expect(addBody.orderId).toBeTruthy();
     expect(addBody.lines).toHaveLength(1);
 
     const details = await bridge.handleTool("set_order_details", {
@@ -140,11 +136,7 @@ describe("tool webhooks", () => {
 
   it("rewrites the pending-item note for platform re-calls and lazily builds sessions", async () => {
     const bridge = makeBridge();
-    // No init for this conversation: the session must build itself.
-    await bridge.handleTool("create_order_draft", {
-      conversation_id: "conv_pending",
-      orderType: "takeaway",
-    });
+    // No init and no draft: session AND draft must both build themselves.
     const add = await bridge.handleTool("add_order_item", {
       conversation_id: "conv_pending",
       menuItemName: "Chicken Meatbox",

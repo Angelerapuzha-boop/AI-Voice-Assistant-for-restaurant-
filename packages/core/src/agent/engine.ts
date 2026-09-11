@@ -123,6 +123,10 @@ export class OrderAgent {
       console.error("[fastpath] failed, falling back to LLM:", err);
     }
 
+    // Everything this turn appends is rolled back to here on failure, so
+    // an abort or API error mid-tool-loop can never leave a dangling
+    // tool_use block that 400s every following turn (2026-09-11 incident).
+    const turnStart = this.messages.length;
     this.messages.push({ role: "user", content: userText });
 
     const toolCalls: ToolCallRecord[] = [];
@@ -207,21 +211,19 @@ export class OrderAgent {
       };
     } catch (err) {
       if (signal?.aborted) {
-        // Caller barged in: keep what was actually said as history.
+        // Caller barged in: rebuild the turn as plain text so no partial
+        // tool structures survive, keeping only what was actually said.
+        this.messages.length = turnStart;
         if (spokenText) {
+          this.messages.push({ role: "user", content: userText });
           this.messages.push({ role: "assistant", content: [{ type: "text", text: spokenText }] });
-        } else {
-          this.messages.pop(); // nothing said; drop the dangling structure
         }
         this.state.lastAssistantText = spokenText;
         return { text: spokenText, toolCalls, endCall: false, interrupted: true };
       }
       this.consecutiveFailures++;
-      // Keep history consistent: model never answered this turn.
-      const last = this.messages[this.messages.length - 1];
-      if (last && last.role === "user" && typeof last.content === "string") {
-        this.messages.pop();
-      }
+      // Keep history consistent: the turn never happened.
+      this.messages.length = turnStart;
       const message =
         this.consecutiveFailures >= 2
           ? "Sorry, I'm having trouble on my end right now. Could you call us back in a few minutes? Sorry about that."

@@ -12,7 +12,7 @@ import {
   SquareTerminalProvider,
   getSquareConnection,
 } from "@meatbox/core";
-import { conversationRelayTwiml, unavailableTwiml } from "./twiml";
+import { conversationRelayTwiml, elevenLabsSipTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
 import { checkBridgeSecret, ElevenLabsBridge, verifyPostCallSignature } from "./elevenlabs-bridge";
@@ -141,6 +141,15 @@ app.post("/twilio/voice", async (req, reply) => {
 
   const callSid = params.CallSid ?? "";
   reply.type("text/xml");
+  // ElevenLabs stack: hand the call to the hosted agent over SIP. The
+  // Dial action falls back to the relay stack if the SIP leg fails.
+  if (env.VOICE_STACK === "elevenlabs" && env.TWILIO_PHONE_NUMBER) {
+    req.log.info({ callSid }, "routing call to ElevenLabs agent via SIP");
+    return elevenLabsSipTwiml({
+      number: env.TWILIO_PHONE_NUMBER,
+      actionPath: publicUrl("/twilio/sip-result"),
+    });
+  }
   try {
     const db = getDb();
     const restaurant = await getDefaultRestaurant(db);
@@ -156,6 +165,44 @@ app.post("/twilio/voice", async (req, reply) => {
     return conversationRelayTwiml({ settings, callSid, speechHintsExtra: extraHints });
   } catch (err) {
     req.log.error({ err }, "voice webhook failed");
+    return unavailableTwiml(
+      "Sorry, we can't take your call right now. Please try again in a few minutes.",
+    );
+  }
+});
+
+// Dial-action after the SIP handoff: a completed SIP leg just ends; a
+// failed one (ElevenLabs unreachable) falls back to the relay stack so
+// the caller still gets served on the same call.
+app.post("/twilio/sip-result", async (req, reply) => {
+  const params = (req.body ?? {}) as Record<string, string>;
+  if (env.TWILIO_AUTH_TOKEN) {
+    const ok = validateTwilioSignature(
+      env.TWILIO_AUTH_TOKEN,
+      req.headers["x-twilio-signature"] as string | undefined,
+      publicUrl("/twilio/sip-result"),
+      params,
+    );
+    if (!ok) return reply.code(403).send("forbidden");
+  }
+  reply.type("text/xml");
+  const status = params.DialCallStatus ?? "";
+  if (status === "completed" || status === "answered") {
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
+  }
+  req.log.warn({ callSid: params.CallSid, status }, "SIP handoff failed — falling back to relay");
+  try {
+    const db = getDb();
+    const restaurant = await getDefaultRestaurant(db);
+    const settings = await getSettings(db, restaurant.id);
+    const items = await listItems(db, restaurant.id);
+    return conversationRelayTwiml({
+      settings,
+      callSid: params.CallSid ?? "",
+      speechHintsExtra: items.map((i) => i.name),
+    });
+  } catch (err) {
+    req.log.error({ err }, "sip fallback failed");
     return unavailableTwiml(
       "Sorry, we can't take your call right now. Please try again in a few minutes.",
     );

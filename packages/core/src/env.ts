@@ -45,10 +45,17 @@ const envSchema = z.object({
   // BRIDGE_SECRET authenticates the platform's calls to us; WEBHOOK_SECRET
   // verifies the HMAC on post-call webhooks; API_KEY lets the setup script
   // manage the agent and the finaliser pull transcripts.
+  // Which stack answers inbound calls: "elevenlabs" hands the call to the
+  // hosted agent over SIP (Twilio number config untouched, instant revert);
+  // "relay" is the original ConversationRelay+Claude path.
+  VOICE_STACK: z.enum(["relay", "elevenlabs"]).default("relay"),
   ELEVENLABS_API_KEY: z.string().default(""),
   ELEVENLABS_AGENT_ID: z.string().default(""),
   ELEVENLABS_BRIDGE_SECRET: z.string().default(""),
   ELEVENLABS_WEBHOOK_SECRET: z.string().default(""),
+  // Digest credentials for the SIP handoff to the hosted agent.
+  ELEVENLABS_SIP_USERNAME: z.string().default(""),
+  ELEVENLABS_SIP_PASSWORD: z.string().default(""),
   // Alice — Kevin's chosen voice, waveform-verified to speak.
   ELEVENLABS_VOICE_ID: z.string().default("Xb7hH8MSUJpSbSDYk0k2"),
   ELEVENLABS_LLM: z.string().default("gemini-2.0-flash"),

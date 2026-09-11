@@ -34,14 +34,28 @@ const API = "https://api.elevenlabs.io";
 const AGENT_NAME = "Meatbox WA — Phone Orders";
 const SECRET_NAME = "meatbox-bridge-secret";
 
-// end_call is the platform's built-in hang-up; the others are covered by
-// the in-prompt menu catalog and only add tool-choice latency.
+// end_call is the platform's built-in hang-up; create_order_draft happens
+// automatically inside the bridge's add_order_item (first-turn latency);
+// the others are covered by the in-prompt menu catalog and only add
+// tool-choice latency.
 const EXCLUDED_TOOLS = new Set([
   "end_call",
+  "create_order_draft",
   "get_menu_category",
   "get_available_modifiers",
   "check_item_availability",
   "calculate_order_total",
+]);
+
+// Mutating tools carry webhook latency the caller can hear — force a
+// short spoken ack ("Yep.") before the request goes out.
+const PRE_SPEECH_TOOLS = new Set([
+  "add_order_item",
+  "update_order_item",
+  "remove_order_item",
+  "repeat_last_order",
+  "confirm_order",
+  "set_order_details",
 ]);
 
 function fail(msg: string): never {
@@ -127,6 +141,7 @@ function webhookToolConfig(def: LlmToolDef, authHeader: unknown): Record<string,
     name: def.name,
     description: def.description,
     response_timeout_secs: 15,
+    pre_tool_speech: PRE_SPEECH_TOOLS.has(def.name) ? "force" : "auto",
     api_schema: {
       url: `${env.VOICE_PUBLIC_URL.replace(/\/$/, "")}/elevenlabs/tools/${def.name}`,
       method: "POST",

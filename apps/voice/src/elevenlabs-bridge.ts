@@ -45,6 +45,7 @@ export const ELEVENLABS_PROMPT_APPENDIX = `
 PLATFORM NOTES
 - To hang up, use the end_call tool AFTER your goodbye line.
 - Every tool needs conversation_id — it is filled in automatically.
+- There is NO create_order_draft tool: the FIRST add_order_item starts the order automatically. When the caller states an item, call add_order_item immediately — nothing needs to happen first.
 - add_order_item pending flow: when it returns itemSavedAsPending with an 'ask' question, say ONLY that question. When the caller answers, call add_order_item AGAIN for the SAME item with their chosen option included in modifierNames.
 - confirm_order requires caller_final_words: the caller's EXACT latest words agreeing to the order (for example "yep" or "yes lock it in"). Quote them verbatim — never paraphrase, never invent. If the caller has not clearly agreed, do not call it.`;
 
@@ -263,6 +264,14 @@ export class ElevenLabsBridge {
 
     const input: Record<string, unknown> = { ...body };
     delete input.conversation_id;
+
+    // First-turn latency: the agent's opening "one meatbox please" must not
+    // cost two sequential webhook round-trips. add_order_item auto-creates
+    // the draft, so create_order_draft never needs its own call.
+    if (name === "add_order_item" && !session.state.draftOrderId) {
+      const draft = await executeTool(session.ctx, session.state, "create_order_draft", {});
+      if (draft.error) return { status: 200, body: draft };
+    }
 
     if (name === "confirm_order") {
       const words = String(input.caller_final_words ?? "").trim();
