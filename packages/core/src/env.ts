@@ -35,6 +35,11 @@ const envSchema = z.object({
   OWNER_NOTIFICATION_PHONE: z.string().default(""),
   SMS_MODE: z.enum(["live", "log"]).default("log"),
 
+  // Call background atmosphere: continuous = looping ambience started at
+  // call setup (only if ConversationRelay mixes it under TTS — verified
+  // empirically); gaps = ambience only inside thinking pauses; off = none.
+  AMBIENCE_MODE: z.enum(["continuous", "gaps", "off"]).default("gaps"),
+
   // n8n event webhook (optional): order.confirmed / order.needs_review /
   // owner_sms_failed events are POSTed here, HMAC-signed with the secret.
   N8N_WEBHOOK_URL: z.string().default(""),

@@ -201,6 +201,19 @@ export class RelaySession {
     // Warm the prompt cache while the greeting plays — first order
     // sentence then answers in roughly half the time.
     if (this.deps.prewarm !== false) void this.agent.prewarm();
+
+    // Continuous restaurant atmosphere for the whole call (loops ~2000s).
+    // preemptible:false so TTS does not stop it — REQUIRES the platform to
+    // mix media under TTS (verified by recorded waveform analysis).
+    if (env.AMBIENCE_MODE === "continuous") {
+      this.send({
+        type: "play",
+        source: `${env.APP_URL.replace(/\/$/, "")}/ambience/room.wav`,
+        loop: 0,
+        preemptible: false,
+        interruptible: false,
+      });
+    }
   }
 
   /** Merge rapid-fire STT finals into one caller turn (quiet window). */
@@ -256,7 +269,7 @@ export class RelaySession {
       }
     }, 1100);
     const ambience1 = setTimeout(() => {
-      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+      if (env.AMBIENCE_MODE === "gaps" && firstTokenMs === null && !this.abort?.signal.aborted) {
         this.send({
           type: "play",
           source: ambienceUrl,
@@ -265,7 +278,7 @@ export class RelaySession {
           interruptible: true,
         });
       }
-    }, 2400);
+    }, 1600);
     // Long tool-heavy outlier: a spoken reassurance, then ambience again.
     const filler2 = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
@@ -273,7 +286,7 @@ export class RelaySession {
       }
     }, 6000);
     const ambience2 = setTimeout(() => {
-      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+      if (env.AMBIENCE_MODE === "gaps" && firstTokenMs === null && !this.abort?.signal.aborted) {
         this.send({
           type: "play",
           source: ambienceUrl,
