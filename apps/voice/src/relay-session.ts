@@ -44,6 +44,8 @@ export interface RelaySessionDeps {
   log: (msg: string, extra?: Record<string, unknown>) => void;
   /** Injectable clock (tests); defaults to the real time. */
   now?: () => Date;
+  /** Override the post-goodbye grace before hanging up (tests use 0). */
+  endDelayMs?: number;
 }
 
 export class RelaySession {
@@ -57,6 +59,9 @@ export class RelaySession {
   // merge fragments arriving within a short quiet window into one turn.
   private pendingText = "";
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  // Hang-up grace: the goodbye must finish PLAYING before we end the call,
+  // and the caller speaking during the grace cancels the hang-up entirely.
+  private pendingEnd: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly ws: WebSocket,
@@ -103,6 +108,7 @@ export class RelaySession {
       }
       case "interrupt": {
         const spoken = String(msg.utteranceUntilInterrupt ?? "");
+        this.cancelPendingEnd();
         this.abort?.abort();
         this.agent?.noteInterruption(spoken);
         if (this.callId) {
@@ -185,8 +191,9 @@ export class RelaySession {
     });
   }
 
-  /** Merge rapid-fire STT finals into one caller turn (600ms quiet window). */
+  /** Merge rapid-fire STT finals into one caller turn (quiet window). */
   private queueFinal(text: string): void {
+    this.cancelPendingEnd(); // caller spoke — we're not hanging up
     this.abort?.abort(); // new speech supersedes any in-flight reply
     this.pendingText = this.pendingText ? `${this.pendingText} ${text}` : text;
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
@@ -292,8 +299,28 @@ export class RelaySession {
     else if (!result.interrupted) this.consecutiveMisses = 0;
 
     if (result.endCall || this.consecutiveMisses >= 3) {
-      await this.finalise(this.consecutiveMisses >= 3 ? "NEEDS_REVIEW" : undefined);
-      this.send({ type: "end" });
+      // Grace period sized to the goodbye so its audio finishes playing
+      // (~3 words/sec) — and if the caller speaks meanwhile, the hang-up
+      // is cancelled and the conversation continues.
+      const forceReview = this.consecutiveMisses >= 3;
+      const words = result.text ? result.text.trim().split(/\s+/).length : 0;
+      const delay = this.deps.endDelayMs ?? Math.min(9000, 2000 + words * 340);
+      this.pendingEnd = setTimeout(() => {
+        this.pendingEnd = null;
+        void (async () => {
+          await this.finalise(forceReview ? "NEEDS_REVIEW" : undefined);
+          this.send({ type: "end" });
+        })().catch(() => undefined);
+      }, delay);
+    }
+  }
+
+  private cancelPendingEnd(): void {
+    if (this.pendingEnd) {
+      clearTimeout(this.pendingEnd);
+      this.pendingEnd = null;
+      // The goodbye was pre-empted — the call carries on.
+      if (this.agent) this.agent.state.endCallRequested = false;
     }
   }
 
@@ -325,6 +352,7 @@ export class RelaySession {
   private async onClose(): Promise<void> {
     this.abort?.abort();
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    if (this.pendingEnd) clearTimeout(this.pendingEnd);
     await this.finalise();
   }
 }

@@ -52,6 +52,16 @@ export function startMaintenanceWorker(log: (msg: string) => void): { stop: () =
     running = true;
     (async () => {
       const db = getDb();
+      // Zombie-call sweep: a relay leg whose WebSocket close never fired
+      // leaves calls stuck in_progress forever (seen twice on 2026-09-11).
+      // Real calls never exceed 15 minutes; close the strays.
+      const zombies = await db.query(
+        `UPDATE calls SET ended_at = now(), status = 'completed',
+           outcome = COALESCE(outcome, 'CALL_DROPPED'),
+           duration_seconds = LEAST(900, EXTRACT(EPOCH FROM (now() - started_at))::int)
+         WHERE ended_at IS NULL AND started_at < now() - interval '15 minutes'`,
+      );
+      if ((zombies.rowCount ?? 0) > 0) log(`zombie-call sweep: closed ${zombies.rowCount}`);
       const expired = await expireStaleReviewDrafts(db);
       if (expired > 0) log(`review sweep: ${expired} unconfirmed review draft(s) expired`);
       const restaurant = await getDefaultRestaurant(db);

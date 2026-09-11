@@ -59,6 +59,7 @@ function makeSession(ws: FakeWs, llm: Llm, token: string) {
     log: () => undefined,
     // Pin the clock to a Wednesday evening when the kitchen is open.
     now: () => new Date("2026-09-09T19:00:00+08:00"),
+    endDelayMs: 0, // no hang-up grace in tests
   });
 }
 
