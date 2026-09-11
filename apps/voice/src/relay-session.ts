@@ -113,7 +113,12 @@ export class RelaySession {
       case "interrupt": {
         const spoken = String(msg.utteranceUntilInterrupt ?? "");
         this.cancelPendingEnd();
-        this.abort?.abort();
+        // Do NOT abort generation here: noisy international lines fire
+        // phantom interrupts (no real speech follows), and aborting left
+        // sentences half-said followed by dead silence. Tokens keep
+        // flowing, so after a phantom pause the voice simply resumes.
+        // REAL barge-in is handled by queueFinal when the caller's actual
+        // words arrive — that's what supersedes the in-flight turn.
         this.agent?.noteInterruption(spoken);
         if (this.callId) {
           await recordCallEvent(getDb(), this.callId, "interrupt", { spoken });
@@ -343,7 +348,9 @@ export class RelaySession {
       // is cancelled and the conversation continues.
       const forceReview = this.consecutiveMisses >= 3;
       const words = result.text ? result.text.trim().split(/\s+/).length : 0;
-      const delay = this.deps.endDelayMs ?? Math.min(9000, 2000 + words * 340);
+      // Generous: international lines add TTS start latency, and cutting
+      // a goodbye is far worse than two spare seconds of open line.
+      const delay = this.deps.endDelayMs ?? Math.min(12000, 2500 + words * 420);
       this.pendingEnd = setTimeout(() => {
         this.pendingEnd = null;
         void (async () => {

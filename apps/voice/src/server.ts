@@ -70,7 +70,18 @@ app.post("/twilio/voice", async (req, reply) => {
       params,
     );
     if (!ok) {
-      req.log.warn("invalid Twilio signature on /twilio/voice");
+      // Diagnostics for the intermittent 403s seen 2026-09-11: log which
+      // params the request carried (names only) so the failing variant
+      // (e.g. a Twilio retry with extra fields) becomes identifiable.
+      req.log.warn(
+        {
+          paramKeys: Object.keys(params).sort().join(","),
+          hasSignature: Boolean(req.headers["x-twilio-signature"]),
+          callSid: params.CallSid ?? "",
+          callStatus: params.CallStatus ?? "",
+        },
+        "invalid Twilio signature on /twilio/voice",
+      );
       return reply.code(403).send("forbidden");
     }
   } else {
