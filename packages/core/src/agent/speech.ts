@@ -40,15 +40,21 @@ const FINISH_PHRASES = new Set([
 ]);
 
 // Confirm-style sentences that don't reduce to a set phrase ("yeah, we
-// can confirm that" — live call 2026-09-11). Any negation wins.
+// can confirm that", "yes, that order is correct" — live calls
+// 2026-09-11). Any negation or change-request word wins.
 const YES_PATTERN =
   /\b(?:(?:we|you|i) can confirm|confirm (?:that|it|the order)|lock (?:it|that) in)\b/;
-const NEGATION = /\b(no|not|don't|dont|nah|wrong|change|hold|wait|actually)\b/;
+const NEGATION =
+  /\b(no|not|don't|dont|nah|wrong|change|hold|wait|actually|but|add|remove|another|instead|make|swap|cancel|repeat)\b/;
+const YES_TOKEN = /^(yes|yep|yeah|yup|aye|correct|righto|sure|absolutely|definitely)$/;
 
 export function isYes(text: string): boolean {
   const t = stripPoliteness(normalise(text));
   if (YES_PHRASES.has(t)) return true;
   if (NEGATION.test(t)) return false;
+  // A sentence LED by a clear yes ("yes, that order is correct") is a yes
+  // once negations are ruled out; stutters ("ye- yes") shift it one slot.
+  if (t.split(" ").slice(0, 2).some((w) => YES_TOKEN.test(w))) return true;
   return YES_PATTERN.test(t);
 }
 

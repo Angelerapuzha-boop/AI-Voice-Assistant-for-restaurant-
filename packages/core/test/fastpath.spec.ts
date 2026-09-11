@@ -96,6 +96,26 @@ describe("classifiers", () => {
       expect(isYes(t), t).toBe(false);
     }
   });
+
+  it("accepts yes-led sentences and rejects change requests (George call 2026-09-11)", () => {
+    for (const t of [
+      "Yes, that order is correct. Thank you.",
+      "Yes. Yes, absolutely. Thank you.",
+      "Ye- yes, that, that order is correct",
+      "yeah all sounds right",
+    ]) {
+      expect(isYes(t), t).toBe(true);
+    }
+    for (const t of [
+      "yes but add another coke",
+      "yeah actually make it two",
+      "yes can you repeat that",
+      "sure, cancel it",
+      "no, I didn't say yes to this order",
+    ]) {
+      expect(isYes(t), t).toBe(false);
+    }
+  });
 });
 
 describe("fast paths (LLM must not be called)", () => {
