@@ -281,9 +281,9 @@ async function main(): Promise<void> {
         background_sound: {
           source_type: "preset",
           source_id: "restaurant",
-          // Sally is a soft voice — ambience stays a distant "feel",
-          // clearly UNDER the voice on a compressed phone line.
-          volume: 0.04,
+          // Sally is a soft voice at the platform's max send level — the
+          // only lever left is the background: near-silent hint of room.
+          volume: 0.02,
           crossfade_loop: true,
         },
       },
