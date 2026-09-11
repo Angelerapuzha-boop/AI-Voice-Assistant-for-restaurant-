@@ -76,21 +76,31 @@ async function api(
   return { ok: res.ok, status: res.status, data };
 }
 
-/** ElevenLabs accepts a JSON-Schema subset; strip what it rejects. */
-function sanitizeSchema(schema: Record<string, unknown>): Record<string, unknown> {
+/** "menuItemId" -> "menu item id" — fallback description for bare params. */
+function humanize(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+}
+
+/**
+ * ElevenLabs accepts a JSON-Schema subset and REQUIRES every property to
+ * carry a description (or dynamic_variable/constant_value); strip what it
+ * rejects and fill missing descriptions from the property name.
+ */
+function sanitizeSchema(schema: Record<string, unknown>, keyName?: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (schema.type) out.type = schema.type;
   if (schema.description) out.description = schema.description;
   if (schema.enum) out.enum = schema.enum;
-  if (schema.items) out.items = sanitizeSchema(schema.items as Record<string, unknown>);
+  if (schema.items) out.items = sanitizeSchema(schema.items as Record<string, unknown>, "value");
   if (schema.properties) {
     out.properties = Object.fromEntries(
       Object.entries(schema.properties as Record<string, Record<string, unknown>>).map(
-        ([k, v]) => [k, sanitizeSchema(v)],
+        ([k, v]) => [k, sanitizeSchema(v, k)],
       ),
     );
   }
   if (schema.required) out.required = schema.required;
+  if (!out.description && keyName) out.description = humanize(keyName);
   return out;
 }
 
@@ -224,7 +234,8 @@ async function main(): Promise<void> {
         },
       },
       tts: {
-        model_id: "eleven_turbo_v2_5",
+        // English agents must use turbo or flash v2 (platform rule).
+        model_id: "eleven_turbo_v2",
         voice_id: env.ELEVENLABS_VOICE_ID,
         stability: 0.5,
         similarity_boost: 0.8,
