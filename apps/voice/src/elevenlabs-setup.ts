@@ -234,7 +234,9 @@ async function main(): Promise<void> {
         prompt: {
           prompt: fallbackPrompt,
           llm: env.ELEVENLABS_LLM,
-          temperature: 0.3,
+          // Low temperature: every call behaves like the reference call
+          // Kevin approved ("keep this call perfectly like this").
+          temperature: 0.2,
           tool_ids: toolIds,
           built_in_tools: {
             end_call: {
