@@ -65,6 +65,27 @@ export class OrderAgent {
     return this.messages;
   }
 
+  /**
+   * Fire-and-forget prompt-cache warm-up: run a 1-token request with the
+   * real system+tools prefix while the greeting is still playing, so the
+   * caller's first sentence hits a WARM cache (cold first turns measured
+   * ~6s; warm ones less than half that).
+   */
+  async prewarm(): Promise<void> {
+    try {
+      for await (const _event of this.llm.stream({
+        system: this.system,
+        messages: [{ role: "user", content: "hi" }],
+        tools: TOOL_DEFS,
+        maxTokens: 1,
+      })) {
+        // drain
+      }
+    } catch {
+      // Warm-up is best-effort; a failure must never affect the call.
+    }
+  }
+
   async handleTurn(
     userText: string,
     handlers: TurnHandlers = {},

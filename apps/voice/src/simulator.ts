@@ -67,6 +67,7 @@ export async function createSimulatorSession(createLlm: (model?: string) => Llm)
   });
   const sessionId = crypto.randomUUID();
   sessions.set(sessionId, { agent, callId: call.id, createdAt: Date.now() });
+  void agent.prewarm(); // same cache warm-up as phone calls
   await appendTranscript(db, call.id, {
     role: "assistant",
     text: settings.aiGreeting,

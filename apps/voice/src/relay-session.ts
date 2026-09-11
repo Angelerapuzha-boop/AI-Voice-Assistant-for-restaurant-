@@ -46,6 +46,8 @@ export interface RelaySessionDeps {
   now?: () => Date;
   /** Override the post-goodbye grace before hanging up (tests use 0). */
   endDelayMs?: number;
+  /** Cache warm-up at setup (default true; tests disable — it would consume scripted LLM turns). */
+  prewarm?: boolean;
 }
 
 export class RelaySession {
@@ -62,6 +64,7 @@ export class RelaySession {
   // Hang-up grace: the goodbye must finish PLAYING before we end the call,
   // and the caller speaking during the grace cancels the hang-up entirely.
   private pendingEnd: ReturnType<typeof setTimeout> | null = null;
+  private fillerIndex = 0;
 
   constructor(
     private readonly ws: WebSocket,
@@ -189,6 +192,9 @@ export class RelaySession {
       text: settings.aiGreeting,
       at: new Date().toISOString(),
     });
+    // Warm the prompt cache while the greeting plays — first order
+    // sentence then answers in roughly half the time.
+    if (this.deps.prewarm !== false) void this.agent.prewarm();
   }
 
   /** Merge rapid-fire STT finals into one caller turn (quiet window). */
@@ -197,14 +203,19 @@ export class RelaySession {
     this.abort?.abort(); // new speech supersedes any in-flight reply
     this.pendingText = this.pendingText ? `${this.pendingText} ${text}` : text;
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
-    this.pendingTimer = setTimeout(() => {
-      const merged = this.pendingText.trim();
-      this.pendingText = "";
-      this.pendingTimer = null;
-      if (merged) this.enqueueTurn(merged);
-      // 400ms: the demo-call recording proved 250ms splits a natural
-      // mid-sentence pause ("nah, — that's it") into two wrong turns.
-    }, 400);
+    // Adaptive quiet window: a substantial utterance (3+ words) is very
+    // likely complete — process fast. Short fragments ("nah,") keep the
+    // longer window so a mid-sentence pause doesn't split the turn.
+    const words = this.pendingText.trim().split(/\s+/).length;
+    this.pendingTimer = setTimeout(
+      () => {
+        const merged = this.pendingText.trim();
+        this.pendingText = "";
+        this.pendingTimer = null;
+        if (merged) this.enqueueTurn(merged);
+      },
+      words >= 3 ? 150 : 400,
+    );
   }
 
   /** Serialise turns — a new final prompt aborts a stale in-flight turn. */
@@ -227,15 +238,15 @@ export class RelaySession {
     const turnStarted = Date.now();
     let firstTokenMs: number | null = null;
     let fillerSent = false;
-    // Dead-air breaker for genuinely long waits only. With the fast model
-    // most turns speak well before this fires; a filler on every turn is a
-    // verbal tic that wrecks the feel (learned from Kevin's real call).
+    // Dead-air breaker: complete silence is worse than a small human
+    // sound. Rotating acknowledgments avoid the identical-word tic.
     const filler = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
         fillerSent = true;
-        this.send({ type: "text", token: "Righto, ", last: false });
+        const acks = ["Righto, ", "Yep, ", "Sure, ", "Okay, "];
+        this.send({ type: "text", token: acks[this.fillerIndex++ % acks.length]!, last: false });
       }
-    }, 1600);
+    }, 1100);
     // Second stage for rare tool-heavy turns: never leave the caller in
     // long silence after the first ack.
     const filler2 = setTimeout(() => {
