@@ -39,8 +39,17 @@ const FINISH_PHRASES = new Set([
   "we're good", "were good", "that is it", "that is all",
 ]);
 
+// Confirm-style sentences that don't reduce to a set phrase ("yeah, we
+// can confirm that" — live call 2026-09-11). Any negation wins.
+const YES_PATTERN =
+  /\b(?:(?:we|you|i) can confirm|confirm (?:that|it|the order)|lock (?:it|that) in)\b/;
+const NEGATION = /\b(no|not|don't|dont|nah|wrong|change|hold|wait|actually)\b/;
+
 export function isYes(text: string): boolean {
-  return YES_PHRASES.has(stripPoliteness(normalise(text)));
+  const t = stripPoliteness(normalise(text));
+  if (YES_PHRASES.has(t)) return true;
+  if (NEGATION.test(t)) return false;
+  return YES_PATTERN.test(t);
 }
 
 export function isFinished(text: string): boolean {

@@ -87,6 +87,15 @@ describe("classifiers", () => {
     expect(isFinished("yes")).toBe(false);
     expect(isFinished("actually add a coke")).toBe(false);
   });
+
+  it("accepts confirm-style sentences and rejects negated ones (live call 2026-09-11)", () => {
+    for (const t of ["Yeah, we can confirm that", "you can confirm the order", "lock that in please", "I can confirm it"]) {
+      expect(isYes(t), t).toBe(true);
+    }
+    for (const t of ["no, don't confirm that", "actually, change it before you lock it in", "wait, not yet"]) {
+      expect(isYes(t), t).toBe(false);
+    }
+  });
 });
 
 describe("fast paths (LLM must not be called)", () => {
