@@ -3,6 +3,7 @@ import {
   appendTranscript,
   buildMenuCatalog,
   endCall,
+  env,
   getDb,
   getDefaultRestaurant,
   getHours,
@@ -238,8 +239,10 @@ export class RelaySession {
     const turnStarted = Date.now();
     let firstTokenMs: number | null = null;
     let fillerSent = false;
-    // Dead-air breaker: complete silence is worse than a small human
-    // sound. Rotating acknowledgments avoid the identical-word tic.
+    // Dead-air breakers, staged. 1) A small human sound beats silence.
+    // 2) Soft restaurant/room ambience under longer thinks — preemptible,
+    // so the AI's first spoken word cuts it off automatically.
+    const ambienceUrl = `${env.APP_URL.replace(/\/$/, "")}/ambience/room.wav`;
     const filler = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
         fillerSent = true;
@@ -247,13 +250,34 @@ export class RelaySession {
         this.send({ type: "text", token: acks[this.fillerIndex++ % acks.length]!, last: false });
       }
     }, 1100);
-    // Second stage for rare tool-heavy turns: never leave the caller in
-    // long silence after the first ack.
+    const ambience1 = setTimeout(() => {
+      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+        this.send({
+          type: "play",
+          source: ambienceUrl,
+          loop: 2,
+          preemptible: true,
+          interruptible: true,
+        });
+      }
+    }, 2400);
+    // Long tool-heavy outlier: a spoken reassurance, then ambience again.
     const filler2 = setTimeout(() => {
       if (firstTokenMs === null && !this.abort?.signal.aborted) {
         this.send({ type: "text", token: "just getting that in for you. ", last: false });
       }
-    }, 5500);
+    }, 6000);
+    const ambience2 = setTimeout(() => {
+      if (firstTokenMs === null && !this.abort?.signal.aborted) {
+        this.send({
+          type: "play",
+          source: ambienceUrl,
+          loop: 3,
+          preemptible: true,
+          interruptible: true,
+        });
+      }
+    }, 7600);
     const result = await this.agent.handleTurn(
       text,
       {
@@ -262,6 +286,8 @@ export class RelaySession {
             firstTokenMs = Date.now() - turnStarted;
             clearTimeout(filler);
             clearTimeout(filler2);
+            clearTimeout(ambience1);
+            clearTimeout(ambience2);
           }
           this.send({ type: "text", token, last: false });
         },
@@ -270,6 +296,8 @@ export class RelaySession {
     );
     clearTimeout(filler);
     clearTimeout(filler2);
+    clearTimeout(ambience1);
+    clearTimeout(ambience2);
     this.send({ type: "text", token: "", last: true });
     const turnMs = Date.now() - turnStarted;
     if (this.callId) {
