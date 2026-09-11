@@ -15,6 +15,7 @@ import {
 import { conversationRelayTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
+import { checkBridgeSecret, ElevenLabsBridge, verifyPostCallSignature } from "./elevenlabs-bridge";
 import { startMaintenanceWorker, startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
 
@@ -54,9 +55,59 @@ app.get("/health", async () => {
     db: dbOk,
     anthropicConfigured: Boolean(env.ANTHROPIC_API_KEY),
     twilioConfigured: Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN),
+    elevenLabsBridge: Boolean(env.ELEVENLABS_BRIDGE_SECRET),
     smsMode: env.SMS_MODE,
   };
 });
+
+// ------------------------------------------------------------ ElevenLabs Agents bridge
+
+const elevenLabsBridge = new ElevenLabsBridge({
+  log: (msg, extra) => app.log.info(extra ?? {}, msg),
+});
+
+app.post("/elevenlabs/call-init", async (req, reply) => {
+  if (!checkBridgeSecret(req.headers["x-bridge-secret"] as string | undefined)) {
+    return reply.code(401).send({ error: "unauthorised" });
+  }
+  return elevenLabsBridge
+    .handleInit((req.body ?? {}) as Record<string, unknown>)
+    .then((r) => reply.code(r.status).send(r.body));
+});
+
+app.post("/elevenlabs/tools/:name", async (req, reply) => {
+  if (!checkBridgeSecret(req.headers["x-bridge-secret"] as string | undefined)) {
+    return reply.code(401).send({ error: "unauthorised" });
+  }
+  const name = (req.params as { name: string }).name;
+  const r = await elevenLabsBridge.handleTool(name, (req.body ?? {}) as Record<string, unknown>);
+  return reply.code(r.status).send(r.body);
+});
+
+// Post-call transcripts arrive HMAC-signed over the raw body, so this route
+// lives in a scope with an unparsed JSON body (same pattern as Square).
+await app.register(async (scope) => {
+  scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    done(null, body);
+  });
+  scope.post("/elevenlabs/post-call", async (req, reply) => {
+    const rawBody = typeof req.body === "string" ? req.body : "";
+    const signed = verifyPostCallSignature(
+      rawBody,
+      req.headers["elevenlabs-signature"] as string | undefined,
+    );
+    const secretOk = checkBridgeSecret(req.headers["x-bridge-secret"] as string | undefined);
+    if (!signed && !secretOk) return reply.code(401).send({ error: "unauthorised" });
+    const r = await elevenLabsBridge.handlePostCall(rawBody);
+    return reply.code(r.status).send(r.body);
+  });
+});
+
+// Safety net for missed post-call webhooks: finalise idle sessions.
+const bridgeSweep = setInterval(() => {
+  void elevenLabsBridge.sweep().catch((err) => app.log.warn({ err }, "elevenlabs sweep failed"));
+}, 60_000);
+bridgeSweep.unref();
 
 // ------------------------------------------------------------ Twilio webhooks
 

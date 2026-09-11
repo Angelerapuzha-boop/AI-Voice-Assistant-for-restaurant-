@@ -40,6 +40,19 @@ const envSchema = z.object({
   // empirically); gaps = ambience only inside thinking pauses; off = none.
   AMBIENCE_MODE: z.enum(["continuous", "gaps", "off"]).default("gaps"),
 
+  // ElevenLabs Agents (voice-platform swap): the hosted agent converses and
+  // calls our order engine back over /elevenlabs/* bridge endpoints.
+  // BRIDGE_SECRET authenticates the platform's calls to us; WEBHOOK_SECRET
+  // verifies the HMAC on post-call webhooks; API_KEY lets the setup script
+  // manage the agent and the finaliser pull transcripts.
+  ELEVENLABS_API_KEY: z.string().default(""),
+  ELEVENLABS_AGENT_ID: z.string().default(""),
+  ELEVENLABS_BRIDGE_SECRET: z.string().default(""),
+  ELEVENLABS_WEBHOOK_SECRET: z.string().default(""),
+  // Alice — Kevin's chosen voice, waveform-verified to speak.
+  ELEVENLABS_VOICE_ID: z.string().default("Xb7hH8MSUJpSbSDYk0k2"),
+  ELEVENLABS_LLM: z.string().default("gemini-2.0-flash"),
+
   // n8n event webhook (optional): order.confirmed / order.needs_review /
   // owner_sms_failed events are POSTed here, HMAC-signed with the secret.
   N8N_WEBHOOK_URL: z.string().default(""),

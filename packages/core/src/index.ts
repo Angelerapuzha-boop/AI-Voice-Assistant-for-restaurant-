@@ -26,5 +26,6 @@ export * from "./agent/prompt";
 export * from "./agent/tools";
 export * from "./agent/engine";
 export * from "./agent/fastpath";
+export * from "./agent/speech";
 export * from "./agent/catalog";
 export { seed, SEED_OWNER_EMAIL, SEED_OWNER_PASSWORD } from "./seed/seed";
