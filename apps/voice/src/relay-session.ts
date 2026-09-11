@@ -66,6 +66,9 @@ export class RelaySession {
   // and the caller speaking during the grace cancels the hang-up entirely.
   private pendingEnd: ReturnType<typeof setTimeout> | null = null;
   private fillerIndex = 0;
+  // Phantom-interrupt recovery: re-ask the last question if an interrupt
+  // is followed by no actual caller words.
+  private phantomTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly ws: WebSocket,
@@ -113,13 +116,24 @@ export class RelaySession {
       case "interrupt": {
         const spoken = String(msg.utteranceUntilInterrupt ?? "");
         this.cancelPendingEnd();
-        // Do NOT abort generation here: noisy international lines fire
-        // phantom interrupts (no real speech follows), and aborting left
-        // sentences half-said followed by dead silence. Tokens keep
-        // flowing, so after a phantom pause the voice simply resumes.
-        // REAL barge-in is handled by queueFinal when the caller's actual
-        // words arrive — that's what supersedes the in-flight turn.
+        // An interrupt kills PLAYBACK client-side no matter what we do, and
+        // audio streamed afterwards within the same utterance goes into a
+        // void. So: abort generation, and if the interrupt turns out to be
+        // PHANTOM (line noise — no real words arrive), recover by
+        // re-asking the last question as a fresh utterance.
+        this.abort?.abort();
         this.agent?.noteInterruption(spoken);
+        if (this.phantomTimer) clearTimeout(this.phantomTimer);
+        this.phantomTimer = setTimeout(() => {
+          this.phantomTimer = null;
+          const lastLine = this.agent?.state.lastAssistantText ?? "";
+          if (!this.closed && lastLine && lastLine.length <= 160 && !this.pendingText) {
+            this.send({ type: "text", token: `Sorry — ${lastLine}`, last: true });
+            if (this.callId) {
+              void recordCallEvent(getDb(), this.callId, "phantom_recovery", { resaid: lastLine });
+            }
+          }
+        }, 1300);
         if (this.callId) {
           await recordCallEvent(getDb(), this.callId, "interrupt", { spoken });
         }
@@ -219,6 +233,10 @@ export class RelaySession {
   /** Merge rapid-fire STT finals into one caller turn (quiet window). */
   private queueFinal(text: string): void {
     this.cancelPendingEnd(); // caller spoke — we're not hanging up
+    if (this.phantomTimer) {
+      clearTimeout(this.phantomTimer); // real words arrived — no re-ask
+      this.phantomTimer = null;
+    }
     this.abort?.abort(); // new speech supersedes any in-flight reply
     this.pendingText = this.pendingText ? `${this.pendingText} ${text}` : text;
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
@@ -412,6 +430,7 @@ export class RelaySession {
     this.abort?.abort();
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
     if (this.pendingEnd) clearTimeout(this.pendingEnd);
+    if (this.phantomTimer) clearTimeout(this.phantomTimer);
     await this.finalise();
   }
 }
