@@ -84,11 +84,14 @@ export function resolveModifierNames(
     if (matches.length !== 1) {
       const options = groups
         .map((g) => `${g.name}: ${g.modifiers.filter((m) => m.isAvailable).map((m) => m.name).join(", ")}`)
+        .filter((s) => !s.endsWith(": "))
         .join("; ");
       return {
         error:
           matches.length === 0
-            ? `No option "${raw}" for this item. Options — ${options}.`
+            ? options
+              ? `No option "${raw}" for this item. Options: ${options}.`
+              : `This item has no selectable options — add it again without modifierNames.`
             : `Option "${raw}" is ambiguous (${matches.map((m) => m.name).join(", ")}). Use the exact option name.`,
       };
     }

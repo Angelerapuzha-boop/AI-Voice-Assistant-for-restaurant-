@@ -692,6 +692,12 @@ async function executeToolInner(
         menuItemName = menuItemName ?? menuItemId;
         menuItemId = undefined;
       }
+      // Models also FABRICATE well-formed ids (live incident: a made-up
+      // uuid alongside the correct name broke the drink add) — an id that
+      // doesn't exist falls back to the name.
+      if (menuItemId && menuItemName && !(await getItem(db, menuItemId))) {
+        menuItemId = undefined;
+      }
       if (!menuItemId && menuItemName) {
         const resolved = await resolveMenuItemByName(db, restaurant.id, menuItemName);
         if ("error" in resolved) return { error: resolved.error };

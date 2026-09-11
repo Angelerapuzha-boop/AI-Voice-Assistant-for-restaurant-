@@ -149,6 +149,20 @@ describe("tool webhooks", () => {
     expect(bridge.getSession("conv_pending")).toBeTruthy();
   });
 
+  it("falls back to the name when the model fabricates a well-formed menuItemId (demo-call incident)", async () => {
+    const bridge = makeBridge();
+    const add = await bridge.handleTool("add_order_item", {
+      conversation_id: "conv_fakeid",
+      menuItemId: "8983995f-9e6b-4573-8994-01f985959929",
+      menuItemName: "Chicken Meatbox",
+      modifierNames: ["Chips & Salad"],
+      quantity: 1,
+    });
+    const body = add.body as { lines?: unknown[]; error?: string };
+    expect(body.error).toBeUndefined();
+    expect(body.lines).toHaveLength(1);
+  });
+
   it("resolves an item NAME passed in the menuItemId field (2026-09-11 live incident)", async () => {
     const bridge = makeBridge();
     const add = await bridge.handleTool("add_order_item", {
