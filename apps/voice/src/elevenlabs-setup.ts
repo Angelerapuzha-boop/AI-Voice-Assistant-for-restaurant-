@@ -260,7 +260,18 @@ async function main(): Promise<void> {
         quality: "high",
         keywords: items.map((i) => i.name).slice(0, 80),
       },
-      turn: { turn_timeout: 7, turn_eagerness: "normal" },
+      turn: {
+        turn_timeout: 7,
+        // Eager: respond the moment the caller stops — "no silence" spec.
+        turn_eagerness: "eager",
+        // Any slow generation gets spoken cover instead of dead air.
+        soft_timeout_config: {
+          timeout_seconds: 3,
+          message: "Just a sec.",
+          use_llm_generated_message: false,
+          max_soft_timeouts_per_generation: 1,
+        },
+      },
       conversation: {
         max_duration_seconds: 480,
         // Kevin's spec: continuous restaurant atmosphere "as a feel, not a
