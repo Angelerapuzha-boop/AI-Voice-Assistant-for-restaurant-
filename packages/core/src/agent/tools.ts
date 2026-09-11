@@ -7,6 +7,7 @@ import {
   listCategories,
   listItems,
   searchMenu,
+  UUID_RE,
 } from "../domain/menu";
 import { getActiveSpecials } from "../domain/specials";
 import {
@@ -682,17 +683,30 @@ async function executeToolInner(
     case "add_order_item": {
       const order = await requireDraft(ctx, state);
       // Name-based ordering (from the MENU section of the prompt) — the
-      // model never needs a UUID or a search round-trip.
+      // model never needs a UUID or a search round-trip. A NAME passed in
+      // the id field (models do this) is resolved, never an error
+      // (2026-09-11 live incident: "Chicken Meatbox" as menuItemId).
       let menuItemId = input.menuItemId ? String(input.menuItemId) : undefined;
-      if (!menuItemId && input.menuItemName) {
-        const resolved = await resolveMenuItemByName(db, restaurant.id, String(input.menuItemName));
+      let menuItemName = input.menuItemName ? String(input.menuItemName) : undefined;
+      if (menuItemId && !UUID_RE.test(menuItemId)) {
+        menuItemName = menuItemName ?? menuItemId;
+        menuItemId = undefined;
+      }
+      if (!menuItemId && menuItemName) {
+        const resolved = await resolveMenuItemByName(db, restaurant.id, menuItemName);
         if ("error" in resolved) return { error: resolved.error };
         menuItemId = resolved.id;
       }
-      let modifierIds = Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : [];
-      if (Array.isArray(input.modifierNames) && input.modifierNames.length > 0 && menuItemId) {
+      // Same defence for options: non-uuid "ids" are treated as names.
+      const rawModifierIds = Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : [];
+      let modifierIds = rawModifierIds.filter((id) => UUID_RE.test(id));
+      const modifierNames = [
+        ...(Array.isArray(input.modifierNames) ? input.modifierNames.map(String) : []),
+        ...rawModifierIds.filter((id) => !UUID_RE.test(id)),
+      ];
+      if (modifierNames.length > 0 && menuItemId) {
         const groups = await getModifierGroups(db, menuItemId);
-        const resolvedMods = resolveModifierNames(groups, input.modifierNames.map(String));
+        const resolvedMods = resolveModifierNames(groups, modifierNames);
         if ("error" in resolvedMods) return { error: resolvedMods.error };
         modifierIds = [...new Set([...modifierIds, ...resolvedMods.ids])];
       }
@@ -760,10 +774,13 @@ async function executeToolInner(
 
     case "update_order_item": {
       const order = await requireDraft(ctx, state);
-      let updateModifierIds = Array.isArray(input.modifierIds)
-        ? input.modifierIds.map(String)
-        : undefined;
-      if (Array.isArray(input.modifierNames)) {
+      if (!UUID_RE.test(String(input.orderItemId ?? ""))) {
+        return { error: "Invalid orderItemId — use the line ids returned by get_order_summary." };
+      }
+      const rawUpdateIds = Array.isArray(input.modifierIds) ? input.modifierIds.map(String) : undefined;
+      let updateModifierIds = rawUpdateIds?.filter((id) => UUID_RE.test(id));
+      const strayNames = rawUpdateIds?.filter((id) => !UUID_RE.test(id)) ?? [];
+      if (Array.isArray(input.modifierNames) || strayNames.length > 0) {
         const lineRes = await db.query(`SELECT menu_item_id FROM order_items WHERE id = $1`, [
           String(input.orderItemId ?? ""),
         ]);
@@ -771,7 +788,11 @@ async function executeToolInner(
           ?.menu_item_id;
         if (lineItemId) {
           const groups = await getModifierGroups(db, lineItemId);
-          const resolvedMods = resolveModifierNames(groups, input.modifierNames.map(String));
+          const wantedNames = [
+            ...(Array.isArray(input.modifierNames) ? input.modifierNames.map(String) : []),
+            ...strayNames,
+          ];
+          const resolvedMods = resolveModifierNames(groups, wantedNames);
           if ("error" in resolvedMods) return { error: resolvedMods.error };
           updateModifierIds = [...new Set([...(updateModifierIds ?? []), ...resolvedMods.ids])];
         }
@@ -792,6 +813,9 @@ async function executeToolInner(
 
     case "remove_order_item": {
       const order = await requireDraft(ctx, state);
+      if (!UUID_RE.test(String(input.orderItemId ?? ""))) {
+        return { error: "Invalid orderItemId — use the line ids returned by get_order_summary." };
+      }
       const updated = await removeOrderItem(db, order.id, String(input.orderItemId ?? ""));
       state.mutationSeq++;
       state.summarySeq = state.mutationSeq;

@@ -46,7 +46,11 @@ export async function listItems(
   return camelRows<MenuItem>(res.rows);
 }
 
+/** LLM-supplied ids reach uuid columns — a non-uuid must mean "not found", never a thrown 22P02. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function getItem(db: Queryable, menuItemId: string): Promise<MenuItem | null> {
+  if (!UUID_RE.test(menuItemId)) return null;
   const res = await db.query(`SELECT * FROM menu_items WHERE id = $1`, [menuItemId]);
   return res.rows[0] ? camelRow<MenuItem>(res.rows[0]) : null;
 }
@@ -55,6 +59,7 @@ export async function getModifierGroups(
   db: Queryable,
   menuItemId: string,
 ): Promise<ModifierGroupWithModifiers[]> {
+  if (!UUID_RE.test(menuItemId)) return [];
   const groupsRes = await db.query(
     `SELECT * FROM menu_item_modifier_groups WHERE menu_item_id = $1 ORDER BY sort_order, name`,
     [menuItemId],
