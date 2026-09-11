@@ -47,15 +47,13 @@ const EXCLUDED_TOOLS = new Set([
   "calculate_order_total",
 ]);
 
-// Mutating tools carry webhook latency the caller can hear — force a
-// short spoken ack ("Yep.") before the request goes out.
+// Force a spoken ack before the slowest-feeling tools only. On quick
+// updates the forced pre-speech made the model ask the question twice
+// (before AND after the tool) — those run on "auto".
 const PRE_SPEECH_TOOLS = new Set([
   "add_order_item",
-  "update_order_item",
-  "remove_order_item",
   "repeat_last_order",
   "confirm_order",
-  "set_order_details",
 ]);
 
 function fail(msg: string): never {
