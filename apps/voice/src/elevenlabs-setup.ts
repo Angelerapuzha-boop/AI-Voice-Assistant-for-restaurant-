@@ -252,9 +252,11 @@ async function main(): Promise<void> {
         // English agents must use turbo or flash v2 (platform rule).
         model_id: "eleven_turbo_v2",
         voice_id: env.ELEVENLABS_VOICE_ID,
-        stability: 0.5,
-        similarity_boost: 0.8,
-        speed: 1.0,
+        // Clarity on an 8kHz phone line: steadier delivery, stronger voice
+        // presence, fractionally slower speech.
+        stability: 0.65,
+        similarity_boost: 0.9,
+        speed: 0.97,
       },
       asr: {
         quality: "high",
@@ -279,7 +281,8 @@ async function main(): Promise<void> {
         background_sound: {
           source_type: "preset",
           source_id: "restaurant",
-          volume: 0.1,
+          // Low enough never to mask the voice on a compressed phone line.
+          volume: 0.08,
           crossfade_loop: true,
         },
       },
