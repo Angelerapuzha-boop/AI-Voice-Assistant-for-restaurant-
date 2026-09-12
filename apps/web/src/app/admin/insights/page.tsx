@@ -39,6 +39,18 @@ interface ActivityRow {
   amount: string;
   at: string | null;
 }
+interface BriefingItem {
+  ts: string;
+  category: "sales" | "calls" | "stock" | "external";
+  icon: string;
+  heading: string;
+  subheading: string;
+  link?: string;
+}
+interface BriefingDay {
+  day: string;
+  items: BriefingItem[];
+}
 
 const AUD = (cents: number | string) =>
   new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(Number(cents) / 100);
@@ -85,9 +97,27 @@ function activityLine(a: ActivityRow): { icon: string; text: string; accent: str
 const PIE_COLOURS = ["#10b981", "#f59e0b", "#8b5cf6", "#0ea5e9", "#f43f5e", "#f97316"];
 const SOURCE_LABEL: Record<string, string> = { phone: "📞 AI phone", pos: "🧾 Counter (POS)", web: "🌐 Web" };
 
+const CATEGORY_STYLE: Record<BriefingItem["category"], string> = {
+  sales: "border-emerald-400",
+  calls: "border-sky-400",
+  stock: "border-amber-400",
+  external: "border-violet-400",
+};
+
+function dayTitle(day: string): string {
+  const d = new Date(`${day}T12:00:00`);
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const label = d.toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short" });
+  if (day === today) return `Today · ${label}`;
+  if (day === yesterday) return `Yesterday · ${label}`;
+  return label;
+}
+
 export default function InsightsPage() {
   const [data, setData] = useState<Insights | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
+  const [briefing, setBriefing] = useState<BriefingDay[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const dismiss = (id: string) => setToasts((t) => t.filter((x) => x.id !== id));
@@ -117,6 +147,12 @@ export default function InsightsPage() {
       }
     } catch {
       /* next poll retries */
+    }
+    try {
+      const res = await fetch("/api/insights/daily");
+      if (res.ok) setBriefing(((await res.json()) as { days: BriefingDay[] }).days);
+    } catch {
+      /* dashboard degrades gracefully */
     }
     try {
       const res = await fetch("/api/insights/news");
@@ -313,6 +349,55 @@ export default function InsightsPage() {
             ))}
             {data.topItems.length === 0 && <li className="text-sm text-stone-400">No sales yet this week.</li>}
           </ul>
+        </div>
+      </div>
+
+      {/* Daily briefing: written insights, day by day */}
+      <div className="mb-6 rounded-2xl bg-white p-5 shadow">
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="text-lg font-extrabold">📰 Daily briefing</h2>
+          <span className="text-xs text-stone-400">Written insights from your data + external factors</span>
+        </div>
+        <p className="mb-4 text-sm text-stone-500">
+          What happened, what&apos;s running down, and what&apos;s coming — scroll back day by day.
+        </p>
+        <div className="max-h-[30rem] space-y-5 overflow-y-auto pr-2">
+          {briefing.map((day) => (
+            <div key={day.day}>
+              <p className="sticky top-0 z-10 mb-2 w-fit rounded-full bg-stone-900 px-3 py-1 text-xs font-bold text-white">
+                {dayTitle(day.day)}
+              </p>
+              <div className="space-y-2">
+                {day.items.map((item, i) => {
+                  const body = (
+                    <>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-bold leading-snug">
+                          <span className="mr-1.5">{item.icon}</span>
+                          {item.heading}
+                        </p>
+                        <span className="shrink-0 text-[11px] text-stone-400">
+                          {new Date(item.ts).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-sm text-stone-600">{item.subheading}</p>
+                    </>
+                  );
+                  const cls = `block rounded-xl border-l-4 bg-stone-50 p-3 ${CATEGORY_STYLE[item.category]}`;
+                  return item.link ? (
+                    <a key={i} href={item.link} target="_blank" rel="noreferrer" className={`${cls} hover:bg-stone-100`}>
+                      {body}
+                    </a>
+                  ) : (
+                    <div key={i} className={cls}>
+                      {body}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {briefing.length === 0 && <p className="text-sm text-stone-400">Building your briefing…</p>}
         </div>
       </div>
 
