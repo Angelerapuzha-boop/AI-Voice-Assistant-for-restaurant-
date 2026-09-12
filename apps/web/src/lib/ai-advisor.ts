@@ -2,6 +2,7 @@ import type pg from "pg";
 import { env, listInventory, stockStatus, type Restaurant } from "@meatbox/core";
 import { fetchGovNews } from "./gov-news";
 import { computeForecast, type ForecastRow } from "./forecast";
+import { computeEfficiency } from "./efficiency";
 
 /**
  * AI adviser: Claude reads the demand forecast, stock position and the
@@ -102,10 +103,11 @@ async function callClaude(prompt: string): Promise<Recommendation[] | null> {
 }
 
 export async function generateBriefing(db: pg.Pool, restaurant: Restaurant): Promise<Briefing> {
-  const [forecast, news, inventory] = await Promise.all([
+  const [forecast, news, inventory, efficiency] = await Promise.all([
     computeForecast(db, restaurant.id),
     fetchGovNews(),
     listInventory(db, restaurant.id),
+    computeEfficiency(db, restaurant.id),
   ]);
   const lowRaw = inventory
     .filter((i) => i.category === "raw" && stockStatus(i) !== "ok")
@@ -136,11 +138,17 @@ ${lowRaw.join("\n") || "(none)"}
 GOVERNMENT ANNOUNCEMENTS (live Australian government feeds):
 ${newsList || "(none currently)"}
 
+EFFICIENCY THIS WEEK (real timings):
+- Calls: ${efficiency.calls.total} total, ${efficiency.calls.completed} became orders, avg ${efficiency.calls.avgSecs ?? "?"}s, ${efficiency.calls.longCalls} over 3 min
+- Kitchen: ${efficiency.kitchen.made} orders made, avg prep ${efficiency.kitchen.avgPrepSecs ? Math.round(efficiency.kitchen.avgPrepSecs / 60) : "?"} min, ${efficiency.kitchen.late} past promised time, food waits ${efficiency.kitchen.avgPickupWaitSecs ? Math.round(efficiency.kitchen.avgPickupWaitSecs / 60) : "?"} min after ready
+- ${efficiency.process.abandonedDrafts} abandoned started-orders, ${efficiency.process.needsReview} flagged for review
+
 Rules for your advice:
 - For each relevant government item: say exactly what the owner should DO (e.g. which stock to buy early and roughly how much extra, check which supplier, watch which price).
 - For surging items: recommend restock quantities first; a modest price rise ONLY when demand is clearly hot (say a % range).
 - If any supply looks threatened (biosecurity, recall, shortage news): recommend an ALTERNATIVE menu item with similar appeal the shop could push or introduce (name a concrete dish idea using their existing ingredients).
 - Forecast items with low cover: urgent restock with quantities.
+- If the efficiency numbers show lost time (late orders, long calls, food waiting), include ONE process-improvement recommendation.
 - Max 8 recommendations, most urgent first. Australian English, plain words, no fluff.
 
 Reply with ONLY this JSON:

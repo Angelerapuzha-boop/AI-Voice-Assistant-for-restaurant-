@@ -9,7 +9,13 @@ interface Item {
   reorderLevel: number;
   parLevel: number;
   category: "dish" | "raw";
+  supplierId: string | null;
+  autoReplenish: boolean;
   status: "ok" | "low" | "out";
+}
+interface SupplierOption {
+  id: string;
+  name: string;
 }
 
 const STATUS_STYLE: Record<Item["status"], string> = {
@@ -26,12 +32,20 @@ export default function InventoryPage() {
   const [editing, setEditing] = useState<Item | null>(null);
   const [error, setError] = useState("");
 
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/inventory");
       if (res.ok) setItems(((await res.json()) as { items: Item[] }).items);
     } catch {
       /* transient — next poll retries */
+    }
+    try {
+      const res = await fetch("/api/suppliers");
+      if (res.ok) setSuppliers(((await res.json()) as { suppliers: SupplierOption[] }).suppliers);
+    } catch {
+      /* optional */
     }
   }, []);
 
@@ -174,6 +188,8 @@ export default function InventoryPage() {
                     newQty: Number(f.get("qty")),
                     reorderLevel: Number(f.get("reorder")),
                     parLevel: Number(f.get("par")),
+                    supplierId: String(f.get("supplier") ?? "") || null,
+                    autoReplenish: f.get("auto") === "on",
                     note: "manual stocktake",
                   },
                   editing.id,
@@ -193,6 +209,21 @@ export default function InventoryPage() {
               <label className="block">
                 Restock target
                 <input name="par" type="number" step="1" min="0" defaultValue={editing.parLevel} className="mt-1 w-full rounded-lg border p-2" />
+              </label>
+              <label className="block">
+                Supplier
+                <select name="supplier" defaultValue={editing.supplierId ?? ""} className="mt-1 w-full rounded-lg border p-2">
+                  <option value="">— none —</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2">
+                <input name="auto" type="checkbox" defaultChecked={editing.autoReplenish} />
+                ⚡ Auto-replenish: SMS/call the supplier automatically when low
               </label>
               <div className="flex justify-end gap-2 pt-1">
                 <button type="button" onClick={() => setEditing(null)} className="rounded-lg px-3 py-1.5 text-stone-500">

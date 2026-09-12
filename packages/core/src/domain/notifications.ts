@@ -15,7 +15,7 @@ import type { SquareOrderSender } from "./square";
 export interface NotificationAttempt {
   id: string;
   orderId: string | null;
-  kind: "owner_sms" | "customer_sms" | "review_sms" | "webhook" | "square_order";
+  kind: "owner_sms" | "customer_sms" | "review_sms" | "supplier_sms" | "webhook" | "square_order";
   toNumber: string;
   body: string;
   status: "pending" | "sent" | "failed" | "gave_up";

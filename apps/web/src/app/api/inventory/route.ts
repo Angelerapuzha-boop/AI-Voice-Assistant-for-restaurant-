@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   adjustInventory,
+  assignSupplierToItem,
   auditLog,
   getDefaultRestaurant,
   listInventory,
@@ -27,6 +28,8 @@ const postSchema = z.object({
   reorderLevel: z.number().min(0).max(100000).optional(),
   parLevel: z.number().min(0).max(100000).optional(),
   note: z.string().max(300).optional(),
+  supplierId: z.string().uuid().nullable().optional(),
+  autoReplenish: z.boolean().optional(),
 });
 
 export const POST = guarded(async (req: Request) => {
@@ -49,6 +52,13 @@ export const POST = guarded(async (req: Request) => {
           note: body.note,
         });
   if (!item) return Response.json({ error: "item not found" }, { status: 404 });
+  if (body.supplierId !== undefined || body.autoReplenish !== undefined) {
+    await assignSupplierToItem(db(), {
+      itemId: body.itemId,
+      supplierId: body.supplierId !== undefined ? body.supplierId : item.supplierId,
+      autoReplenish: body.autoReplenish,
+    });
+  }
   await auditLog(db(), {
     restaurantId: restaurant.id,
     actor: user.email,

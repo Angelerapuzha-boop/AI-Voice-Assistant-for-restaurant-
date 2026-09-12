@@ -8,9 +8,36 @@ import {
   getSettings,
   processPendingNotifications,
   recalcQueueEstimates,
+  sweepAutoReplenishment,
   sweepGoogleReviewSms,
+  env,
   type SmsSender,
 } from "@meatbox/core";
+
+/**
+ * Automated supplier call: a short spoken order via a plain Twilio
+ * outbound call (the SMS with the confirm link is the primary channel;
+ * the call makes sure it's noticed). Live SMS mode gates real calls.
+ */
+async function placeSupplierCall(to: string, script: string, log: (msg: string) => void): Promise<void> {
+  if (env.SMS_MODE !== "live" || !env.TWILIO_ACCOUNT_SID || !env.TWILIO_PHONE_NUMBER) {
+    log(`[supplier-call:log] to=${to}: ${script.slice(0, 80)}…`);
+    return;
+  }
+  const twiml = `<Response><Pause length="1"/><Say language="en-AU">${script
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")}</Say><Pause length="1"/><Say language="en-AU">Goodbye.</Say></Response>`;
+  const auth = Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString("base64");
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Calls.json`,
+    {
+      method: "POST",
+      headers: { authorization: `Basic ${auth}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ From: env.TWILIO_PHONE_NUMBER, To: to, Twiml: twiml }),
+    },
+  );
+  if (!res.ok) log(`supplier call to ${to} failed: ${res.status}`);
+}
 
 /**
  * Outbox processor: polls the notification_attempts table and sends due
@@ -79,6 +106,15 @@ export function startMaintenanceWorker(log: (msg: string) => void): { stop: () =
       // Google-review ask: 1h after completion, once per customer ever.
       const reviews = await sweepGoogleReviewSms(db, { restaurant, settings });
       if (reviews > 0) log(`google-review sweep: ${reviews} ask(s) queued`);
+      // Automatic stock replacement: low auto-replenish items get one
+      // open supplier request (SMS + optional automated call).
+      const repl = await sweepAutoReplenishment(db, { restaurant, appUrl: env.APP_URL });
+      if (repl.created > 0) log(`replenishment sweep: ${repl.created} supplier request(s) raised`);
+      for (const call of repl.calls) {
+        await placeSupplierCall(call.supplierPhone, call.script, log).catch((err: Error) =>
+          log(`supplier call failed: ${err.message}`),
+        );
+      }
     })()
       .catch((err: Error) => log(`maintenance pass failed: ${err.message}`))
       .finally(() => {

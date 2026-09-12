@@ -62,6 +62,18 @@ interface AiBriefing {
   source: "ai" | "rules";
   recommendations: Recommendation[];
 }
+interface EfficiencyReport {
+  calls: { total: number; completed: number; avgSecs: number | null; longCalls: number };
+  kitchen: {
+    made: number;
+    avgPrepSecs: number | null;
+    late: number;
+    avgLateSecs: number | null;
+    avgPickupWaitSecs: number | null;
+  };
+  process: { abandonedDrafts: number; needsReview: number };
+  findings: { icon: string; heading: string; detail: string }[];
+}
 interface ForecastRow {
   name: string;
   unit: string;
@@ -144,6 +156,7 @@ export default function InsightsPage() {
   const [advice, setAdvice] = useState<AiBriefing | null>(null);
   const [regenBusy, setRegenBusy] = useState(false);
   const [forecast, setForecast] = useState<ForecastRow[]>([]);
+  const [efficiency, setEfficiency] = useState<EfficiencyReport | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const dismiss = (id: string) => setToasts((t) => t.filter((x) => x.id !== id));
@@ -183,6 +196,12 @@ export default function InsightsPage() {
     try {
       const res = await fetch("/api/insights/forecast");
       if (res.ok) setForecast(((await res.json()) as { rows: ForecastRow[] }).rows);
+    } catch {
+      /* dashboard degrades gracefully */
+    }
+    try {
+      const res = await fetch("/api/insights/efficiency");
+      if (res.ok) setEfficiency((await res.json()) as EfficiencyReport);
     } catch {
       /* dashboard degrades gracefully */
     }
@@ -516,6 +535,59 @@ export default function InsightsPage() {
           </table>
         </div>
       </div>
+
+      {/* Efficiency report: where time is lost */}
+      {efficiency && (
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-lg font-extrabold">⚙️ Efficiency report</h2>
+            <span className="text-xs text-stone-400">Last 7 days · from real timestamps</span>
+          </div>
+          <div className="mb-4 grid grid-cols-2 gap-3 text-center md:grid-cols-5">
+            <div className="rounded-xl bg-stone-50 p-3">
+              <p className="text-2xl font-extrabold">
+                {efficiency.calls.avgSecs !== null ? `${Math.floor(efficiency.calls.avgSecs / 60)}:${String(efficiency.calls.avgSecs % 60).padStart(2, "0")}` : "—"}
+              </p>
+              <p className="text-xs text-stone-500">avg call</p>
+            </div>
+            <div className="rounded-xl bg-stone-50 p-3">
+              <p className="text-2xl font-extrabold">
+                {efficiency.calls.total > 0 ? `${Math.round((100 * efficiency.calls.completed) / efficiency.calls.total)}%` : "—"}
+              </p>
+              <p className="text-xs text-stone-500">calls → orders</p>
+            </div>
+            <div className="rounded-xl bg-stone-50 p-3">
+              <p className="text-2xl font-extrabold">
+                {efficiency.kitchen.avgPrepSecs !== null ? `${Math.round(efficiency.kitchen.avgPrepSecs / 60)}m` : "—"}
+              </p>
+              <p className="text-xs text-stone-500">avg kitchen prep</p>
+            </div>
+            <div className="rounded-xl bg-stone-50 p-3">
+              <p className="text-2xl font-extrabold">
+                {efficiency.kitchen.made > 0 ? `${Math.round((100 * (efficiency.kitchen.made - efficiency.kitchen.late)) / efficiency.kitchen.made)}%` : "—"}
+              </p>
+              <p className="text-xs text-stone-500">on-time vs promise</p>
+            </div>
+            <div className="rounded-xl bg-stone-50 p-3">
+              <p className="text-2xl font-extrabold">
+                {efficiency.kitchen.avgPickupWaitSecs !== null ? `${Math.round(efficiency.kitchen.avgPickupWaitSecs / 60)}m` : "—"}
+              </p>
+              <p className="text-xs text-stone-500">food waits for pickup</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {efficiency.findings.map((f, i) => (
+              <div key={i} className="rounded-xl border-l-4 border-stone-300 bg-stone-50 p-3">
+                <p className="font-bold leading-snug">
+                  <span className="mr-1.5">{f.icon}</span>
+                  {f.heading}
+                </p>
+                <p className="mt-0.5 text-sm text-stone-600">{f.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Daily briefing: written insights, day by day */}
       <div className="mb-6 rounded-2xl bg-white p-5 shadow">

@@ -19,6 +19,8 @@ export interface InventoryItemRow {
   parLevel: number;
   /** 'dish' auto-depletes with orders; 'raw' is the manual purchase list. */
   category: "dish" | "raw";
+  supplierId: string | null;
+  autoReplenish: boolean;
   active: boolean;
   updatedAt: Date;
 }
