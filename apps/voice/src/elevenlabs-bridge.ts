@@ -49,6 +49,7 @@ PLATFORM NOTES
 - When you speak BEFORE a tool call, say ONLY a short ack. NEVER ask a question before the tool result returns — ask it AFTER, exactly once.
 - VARY your acknowledgements like a real person: rotate between "Yep.", "No worries.", "Sure.", "Righto.", "Easy.", "Got it." — NEVER the same ack twice in a row, and never more than one ack in a single reply ("Just a sec. No worries." is wrong — pick one).
 - NEVER say the same sentence or question twice. If you already said it, do not say it again in your next reply.
+- FAKE/PRANK CALLS: if the caller is clearly not ordering (jokes, absurd requests, abuse, random talk, kids mucking around): give ONE gentle redirect — "Are you after some food today?" If it continues, say "I'll let you go — call back when you'd like to order. Bye." and end_call. Never repeat offensive words. Never confirm an order you suspect is fake — flag_for_review instead. Stay calm and polite no matter what is said.
 - SPEED RULES (target: whole call under a minute):
   - When an item needs BOTH a base and a sauce, ask them TOGETHER in one short question: "Chips and salad or rice and salad — and which sauce?" Accept both answers from one reply.
   - After the order is complete ask ONLY the name. Do NOT ask takeaway/dine-in as its own question — instead SAY it in the read-back: "...for takeaway, under Kevin. Correct?" (use dine-in if they said so). Their yes confirms both; if they correct to dining in, update with set_order_details and confirm the change briefly.
@@ -225,6 +226,23 @@ export class ElevenLabsBridge {
       callSid: body.call_sid ? String(body.call_sid) : undefined,
       callerNumber: body.caller_id ? String(body.caller_id) : undefined,
     });
+    // Repeat-nuisance awareness: a number that keeps calling today
+    // without ordering gets a caution injected into this call's brief.
+    let cautionNote = "";
+    if (session.ctx.callerNumber) {
+      const history = await session.ctx.db.query(
+        `SELECT COUNT(*)::int AS calls,
+                COUNT(*) FILTER (WHERE outcome = 'ORDER_COMPLETED')::int AS ordered
+         FROM calls
+         WHERE restaurant_id = $1 AND caller_number = $2
+           AND started_at > now() - interval '24 hours'`,
+        [session.ctx.restaurant.id, session.ctx.callerNumber],
+      );
+      const h = history.rows[0] as { calls: number; ordered: number };
+      if (h.calls >= 3 && h.ordered === 0) {
+        cautionNote = `\n\nCAUTION: this number has called ${h.calls} times in the last 24 hours without ever ordering. Be polite but BRIEF — no menu recitals. If there is no genuine order intent within the first exchange, say goodbye and end_call.`;
+      }
+    }
     const prompt =
       buildSystemPrompt({
         restaurant: session.ctx.restaurant,
@@ -233,7 +251,9 @@ export class ElevenLabsBridge {
         callerNumber: session.ctx.callerNumber,
         now: this.now(),
         menuCatalog: session.ctx.menuCatalog,
-      }) + ELEVENLABS_PROMPT_APPENDIX;
+      }) +
+      ELEVENLABS_PROMPT_APPENDIX +
+      cautionNote;
     this.log(`[11l] call-init ${Date.now() - t0}ms`, {
       conversationId,
       caller: session.ctx.callerNumber ?? "(none)",

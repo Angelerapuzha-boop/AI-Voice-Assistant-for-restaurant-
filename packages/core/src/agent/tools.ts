@@ -682,6 +682,13 @@ async function executeToolInner(
 
     case "add_order_item": {
       const order = await requireDraft(ctx, state);
+      // Prank-order guard: absurd quantities never reach the cart.
+      if (Number(input.quantity ?? 1) > 20) {
+        return {
+          error:
+            "That quantity is unusually large (max 20 per line). Confirm the exact number with the caller; for genuine catering orders take their name and number, flag_for_review, and say staff will call back to arrange it.",
+        };
+      }
       // Name-based ordering (from the MENU section of the prompt) — the
       // model never needs a UUID or a search round-trip. A NAME passed in
       // the id field (models do this) is resolved, never an error
@@ -780,6 +787,12 @@ async function executeToolInner(
 
     case "update_order_item": {
       const order = await requireDraft(ctx, state);
+      if (input.quantity !== undefined && Number(input.quantity) > 20) {
+        return {
+          error:
+            "That quantity is unusually large (max 20 per line). For genuine catering orders take a name and number, flag_for_review, and say staff will call back.",
+        };
+      }
       if (!UUID_RE.test(String(input.orderItemId ?? ""))) {
         return { error: "Invalid orderItemId — use the line ids returned by get_order_summary." };
       }
@@ -912,6 +925,14 @@ async function executeToolInner(
         return {
           error:
             "The order changed since you last read it back. Call get_order_summary, read it to the customer, and get an explicit yes before confirming.",
+        };
+      }
+      // Fake-bulk-order guard: very large phone orders get a human
+      // callback instead of silently hitting the kitchen.
+      if (order.totalCents > 30000) {
+        return {
+          error:
+            "Orders over $300 need staff confirmation. Make sure you have the caller's name and contact number (set_order_details), then flag_for_review and tell them staff will call back within a few minutes to confirm.",
         };
       }
       // HARD guard, model-independent: the caller's own current utterance

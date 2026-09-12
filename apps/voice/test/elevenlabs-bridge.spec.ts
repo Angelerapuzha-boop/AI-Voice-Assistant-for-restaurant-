@@ -177,6 +177,64 @@ describe("tool webhooks", () => {
   });
 });
 
+describe("fake-call guards", () => {
+  it("rejects absurd quantities server-side", async () => {
+    const bridge = makeBridge();
+    await bridge.handleTool("add_order_item", {
+      conversation_id: "conv_prank",
+      menuItemName: "Chicken Meatbox",
+      modifierNames: ["Chips & Salad"],
+      quantity: 1,
+    });
+    const big = await bridge.handleTool("add_order_item", {
+      conversation_id: "conv_prank",
+      menuItemName: "Chicken Meatbox",
+      modifierNames: ["Chips & Salad"],
+      quantity: 500,
+    });
+    expect((big.body as { error?: string }).error).toMatch(/unusually large/);
+  });
+
+  it("orders over $300 cannot auto-confirm", async () => {
+    const bridge = makeBridge();
+    await bridge.handleTool("add_order_item", {
+      conversation_id: "conv_big",
+      menuItemName: "Chicken Meatbox",
+      modifierNames: ["Chips & Salad"],
+      quantity: 16, // 16 x ~$19.95 = ~$319
+    });
+    await bridge.handleTool("set_order_details", {
+      conversation_id: "conv_big",
+      customerName: "Bulk Test",
+    });
+    const confirm = await bridge.handleTool("confirm_order", {
+      conversation_id: "conv_big",
+      caller_final_words: "yes please",
+    });
+    expect((confirm.body as { error?: string }).error).toMatch(/staff confirmation/);
+  });
+
+  it("injects a caution for numbers that keep calling without ordering", async () => {
+    const db = getDb();
+    const restaurant = await getDefaultRestaurant(db);
+    for (let i = 0; i < 3; i++) {
+      await db.query(
+        `INSERT INTO calls (restaurant_id, twilio_call_sid, caller_number, ended_at, outcome)
+         VALUES ($1, $2, '+61499000111', now(), 'NO_ORDER')`,
+        [restaurant.id, `CA_nuisance_${i}`],
+      );
+    }
+    const bridge = makeBridge();
+    const r = await bridge.handleInit({
+      conversation_id: "conv_nuis",
+      caller_id: "+61499000111",
+    });
+    const prompt = (r.body as { conversation_config_override: { agent: { prompt: { prompt: string } } } })
+      .conversation_config_override.agent.prompt.prompt;
+    expect(prompt).toContain("CAUTION: this number has called");
+  });
+});
+
 describe("post-call finalisation", () => {
   it("writes the transcript, closes the call row and drops the session", async () => {
     const bridge = makeBridge();
