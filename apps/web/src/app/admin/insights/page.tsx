@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
    Charts are hand-built SVG/CSS — colourful, dependency-free, robust. */
 
 interface Insights {
+  activity: ActivityRow[];
   today: { orders: number; revenue: string; avg_order: number };
   byHour: { hour: number; orders: number; revenue: string }[];
   revenue14: { day: string; orders: number; revenue: string }[];
@@ -30,9 +31,57 @@ interface Toast {
   body: string;
   link?: string;
 }
+interface ActivityRow {
+  kind: "order" | "stock" | "call";
+  event: string;
+  ref: string;
+  label: string;
+  amount: string;
+  at: string | null;
+}
 
 const AUD = (cents: number | string) =>
   new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(Number(cents) / 100);
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return "";
+  const secs = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (secs < 60) return "just now";
+  if (secs < 3600) return `${Math.floor(secs / 60)} min ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)} h ago`;
+  return new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+}
+
+const CALL_OUTCOME: Record<string, string> = {
+  ORDER_COMPLETED: "✅ order placed",
+  NO_ORDER: "no order",
+  MENU_ENQUIRY: "menu enquiry",
+  REVIEW_LINK_SENT: "text-to-confirm sent",
+  CUSTOMER_CANCELLED: "cancelled",
+  NEEDS_REVIEW: "needs review",
+  CALL_DROPPED: "dropped",
+  "in progress": "on the line now",
+};
+
+function activityLine(a: ActivityRow): { icon: string; text: string; accent: string } {
+  if (a.kind === "order") {
+    return a.event === "cancelled"
+      ? { icon: "✖", accent: "border-red-300", text: `Order ${a.ref} cancelled — ${a.label}` }
+      : { icon: "🧾", accent: "border-emerald-300", text: `Order ${a.ref} confirmed — ${AUD(a.amount)} · ${a.label}` };
+  }
+  if (a.kind === "stock") {
+    const d = Number(a.amount);
+    return a.event === "restock"
+      ? { icon: "📦", accent: "border-emerald-300", text: `${a.ref} restocked (+${d})` }
+      : { icon: "📦", accent: "border-amber-300", text: `${a.ref} stocktake (${d > 0 ? "+" : ""}${d})` };
+  }
+  const mins = Math.round(Number(a.amount) / 60);
+  return {
+    icon: "📞",
+    accent: "border-sky-300",
+    text: `Call ${a.label.replace(/^(\+\d{4})\d+(\d{3})$/, "$1···$2")} — ${CALL_OUTCOME[a.event] ?? a.event}${Number(a.amount) > 0 ? ` (${mins < 1 ? "<1" : mins} min)` : ""}`,
+  };
+}
 const PIE_COLOURS = ["#10b981", "#f59e0b", "#8b5cf6", "#0ea5e9", "#f43f5e", "#f97316"];
 const SOURCE_LABEL: Record<string, string> = { phone: "📞 AI phone", pos: "🧾 Counter (POS)", web: "🌐 Web" };
 
@@ -118,7 +167,7 @@ export default function InsightsPage() {
   });
 
   return (
-    <div className="max-w-5xl">
+    <div className="max-w-7xl">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">📊 Daily insights</h1>
         <span className="text-xs text-stone-400">Live — refreshes every minute</span>
@@ -171,6 +220,8 @@ export default function InsightsPage() {
         </div>
       )}
 
+      <div className="grid items-start gap-6 xl:grid-cols-3">
+        <div className="xl:col-span-2">
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
         {/* Revenue 14 days */}
         <div className="rounded-2xl bg-white p-4 shadow">
@@ -203,7 +254,7 @@ export default function InsightsPage() {
                     className="w-full rounded-t-md bg-gradient-to-t from-orange-500 to-amber-300"
                     style={{ height: `${row ? Math.max(4, (130 * row.orders) / maxHour) : 2}px` }}
                   />
-                  <span className="text-[10px] text-stone-400">{hour % 12 === 0 ? 12 : hour % 12}{hour < 12 ? "a" : "p"}</span>
+                  <span className="text-[10px] text-stone-400">{hour % 12 === 0 ? 12 : hour % 12}{hour < 12 || hour === 24 ? "a" : "p"}</span>
                 </div>
               );
             })}
@@ -299,6 +350,35 @@ export default function InsightsPage() {
             </a>
           ))}
           {news.length === 0 && <p className="text-sm text-stone-400">Fetching government feeds…</p>}
+        </div>
+      </div>
+        </div>
+
+        {/* Live activity rail */}
+        <div className="rounded-2xl bg-white p-4 shadow">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-bold">⚡ Live activity</h2>
+            <span className="flex items-center gap-1 text-xs text-emerald-600">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> live
+            </span>
+          </div>
+          <ul className="max-h-[52rem] space-y-2 overflow-y-auto pr-1">
+            {data.activity.map((a, i) => {
+              const line = activityLine(a);
+              return (
+                <li key={i} className={`rounded-xl border-l-4 bg-stone-50 p-2.5 ${line.accent}`}>
+                  <p className="text-sm leading-snug">
+                    <span className="mr-1">{line.icon}</span>
+                    {line.text}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-stone-400">{timeAgo(a.at)}</p>
+                </li>
+              );
+            })}
+            {data.activity.length === 0 && (
+              <li className="text-sm text-stone-400">Updates appear here as orders, calls and restocks happen.</li>
+            )}
+          </ul>
         </div>
       </div>
 

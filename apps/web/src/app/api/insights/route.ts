@@ -69,6 +69,29 @@ export const GET = guarded(async () => {
     ),
   ]);
 
+  // Live activity rail: latest order, stock and call events, one stream.
+  const activity = await db().query(
+    `SELECT * FROM (
+       SELECT 'order' AS kind,
+              CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'confirmed' END AS event,
+              COALESCE(public_order_number, '') AS ref,
+              COALESCE(NULLIF(customer_name, ''), 'Walk-in') AS label,
+              total_cents::numeric AS amount,
+              COALESCE(confirmed_at, updated_at) AS at
+       FROM orders
+       WHERE restaurant_id = $1 AND confirmed_at IS NOT NULL
+       UNION ALL
+       SELECT 'stock', m.reason, ii.name, COALESCE(NULLIF(m.actor, ''), 'auto'), m.delta::numeric, m.created_at
+       FROM inventory_movements m JOIN inventory_items ii ON ii.id = m.inventory_item_id
+       WHERE ii.restaurant_id = $1 AND m.reason IN ('restock', 'adjustment')
+       UNION ALL
+       SELECT 'call', COALESCE(outcome, 'in progress'), '', COALESCE(NULLIF(caller_number, ''), 'unknown'),
+              COALESCE(duration_seconds, 0)::numeric, started_at
+       FROM calls WHERE restaurant_id = $1
+     ) t ORDER BY at DESC NULLS LAST LIMIT 25`,
+    [rid],
+  );
+
   const inventory = await listInventory(db(), rid);
   const lowStock = inventory
     .map((i) => ({ ...i, status: stockStatus(i) }))
@@ -86,5 +109,6 @@ export const GET = guarded(async () => {
     callsToday: calls.rows[0],
     soldOut: soldOut.rows.map((r) => (r as { name: string }).name),
     lowStock,
+    activity: activity.rows,
   });
 });
