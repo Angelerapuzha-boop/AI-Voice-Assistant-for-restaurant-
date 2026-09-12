@@ -51,6 +51,29 @@ interface BriefingDay {
   day: string;
   items: BriefingItem[];
 }
+interface Recommendation {
+  area: "supply_watch" | "demand" | "forecast" | "pricing" | "menu";
+  urgency: "now" | "this_week" | "consider";
+  heading: string;
+  detail: string;
+}
+interface AiBriefing {
+  generatedAt: string;
+  source: "ai" | "rules";
+  recommendations: Recommendation[];
+}
+interface ForecastRow {
+  name: string;
+  unit: string;
+  lastWeek: number;
+  prevWeek: number;
+  trendPct: number | null;
+  predictedNextWeek: number;
+  currentQty: number;
+  coverDays: number | null;
+  suggestedOrderQty: number;
+  action: "restock_now" | "order_this_week" | "ok" | "no_demand";
+}
 
 const AUD = (cents: number | string) =>
   new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(Number(cents) / 100);
@@ -118,6 +141,9 @@ export default function InsightsPage() {
   const [data, setData] = useState<Insights | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [briefing, setBriefing] = useState<BriefingDay[]>([]);
+  const [advice, setAdvice] = useState<AiBriefing | null>(null);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [forecast, setForecast] = useState<ForecastRow[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const dismiss = (id: string) => setToasts((t) => t.filter((x) => x.id !== id));
@@ -151,6 +177,18 @@ export default function InsightsPage() {
     try {
       const res = await fetch("/api/insights/daily");
       if (res.ok) setBriefing(((await res.json()) as { days: BriefingDay[] }).days);
+    } catch {
+      /* dashboard degrades gracefully */
+    }
+    try {
+      const res = await fetch("/api/insights/forecast");
+      if (res.ok) setForecast(((await res.json()) as { rows: ForecastRow[] }).rows);
+    } catch {
+      /* dashboard degrades gracefully */
+    }
+    try {
+      const res = await fetch("/api/insights/ai");
+      if (res.ok) setAdvice((await res.json()) as AiBriefing);
     } catch {
       /* dashboard degrades gracefully */
     }
@@ -349,6 +387,133 @@ export default function InsightsPage() {
             ))}
             {data.topItems.length === 0 && <li className="text-sm text-stone-400">No sales yet this week.</li>}
           </ul>
+        </div>
+      </div>
+
+      {/* AI adviser: recommendations across supply watch, demand, forecast */}
+      <div className="mb-6 rounded-2xl border-2 border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-5 shadow">
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="text-lg font-extrabold">🤖 AI adviser</h2>
+          <div className="flex items-center gap-2 text-xs text-stone-500">
+            {advice && (
+              <span>
+                {advice.source === "ai" ? "AI-generated" : "auto"} ·{" "}
+                {new Date(advice.generatedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              disabled={regenBusy}
+              onClick={() => {
+                setRegenBusy(true);
+                fetch("/api/insights/ai", { method: "POST" })
+                  .then(async (r) => r.ok && setAdvice((await r.json()) as AiBriefing))
+                  .finally(() => setRegenBusy(false));
+              }}
+              className="rounded-lg bg-violet-600 px-3 py-1 font-bold text-white disabled:opacity-40"
+            >
+              {regenBusy ? "Thinking…" : "Regenerate"}
+            </button>
+          </div>
+        </div>
+        <p className="mb-4 text-sm text-stone-500">
+          Recommendations from your demand, stock and the government supply watch — what to buy early, when to
+          adjust a price, and what to introduce if supply is blocked.
+        </p>
+        <div className="space-y-2">
+          {(advice?.recommendations ?? []).map((r, i) => (
+            <div key={i} className="rounded-xl bg-white p-3 shadow-sm">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                    r.urgency === "now"
+                      ? "bg-red-600 text-white"
+                      : r.urgency === "this_week"
+                        ? "bg-amber-400 text-amber-950"
+                        : "bg-stone-200 text-stone-600"
+                  }`}
+                >
+                  {r.urgency === "now" ? "ACT NOW" : r.urgency === "this_week" ? "THIS WEEK" : "CONSIDER"}
+                </span>
+                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
+                  {r.area.replace("_", " ")}
+                </span>
+              </div>
+              <p className="font-bold leading-snug">{r.heading}</p>
+              <p className="mt-0.5 text-sm text-stone-600">{r.detail}</p>
+            </div>
+          ))}
+          {!advice && <p className="text-sm text-stone-400">Generating recommendations…</p>}
+          {advice && advice.recommendations.length === 0 && (
+            <p className="text-sm text-stone-400">Nothing needs attention right now — all stocked and steady.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Forecast & restock plan */}
+      <div className="mb-6 rounded-2xl bg-white p-5 shadow">
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="text-lg font-extrabold">🔮 Forecast &amp; restock plan</h2>
+          <span className="text-xs text-stone-400">Predicted from your real order history · 10-day buffer target</span>
+        </div>
+        <p className="mb-3 text-sm text-stone-500">
+          What sold, what&apos;s predicted next week, and what to order now so no customer ever waits — even if a
+          shipment is blocked for 10 days.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-stone-100 text-left">
+              <tr>
+                <th className="p-2">Item</th>
+                <th className="p-2 text-right">Last wk</th>
+                <th className="p-2 text-right">Trend</th>
+                <th className="p-2 text-right">Predicted next wk</th>
+                <th className="p-2 text-right">Stock</th>
+                <th className="p-2 text-right">Cover</th>
+                <th className="p-2">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {forecast
+                .filter((f) => f.action !== "no_demand")
+                .slice(0, 12)
+                .map((f) => (
+                  <tr key={f.name} className="border-t">
+                    <td className="p-2 font-medium">{f.name}</td>
+                    <td className="p-2 text-right">{f.lastWeek}</td>
+                    <td className={`p-2 text-right font-semibold ${f.trendPct !== null && f.trendPct > 0 ? "text-emerald-600" : f.trendPct !== null && f.trendPct < 0 ? "text-red-500" : "text-stone-400"}`}>
+                      {f.trendPct === null ? "new" : `${f.trendPct > 0 ? "▲" : f.trendPct < 0 ? "▼" : ""}${Math.abs(f.trendPct)}%`}
+                    </td>
+                    <td className="p-2 text-right font-bold">{f.predictedNextWeek}</td>
+                    <td className="p-2 text-right">{f.currentQty}</td>
+                    <td className={`p-2 text-right ${f.coverDays !== null && f.coverDays < 3 ? "font-bold text-red-600" : f.coverDays !== null && f.coverDays < 10 ? "font-bold text-amber-600" : "text-stone-500"}`}>
+                      {f.coverDays === null ? "—" : `${f.coverDays}d`}
+                    </td>
+                    <td className="p-2">
+                      {f.action === "restock_now" && (
+                        <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs font-bold text-white">
+                          Restock NOW +{f.suggestedOrderQty}
+                        </span>
+                      )}
+                      {f.action === "order_this_week" && (
+                        <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs font-bold text-amber-950">
+                          Order +{f.suggestedOrderQty} this week
+                        </span>
+                      )}
+                      {f.action === "ok" && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">OK</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              {forecast.filter((f) => f.action !== "no_demand").length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-4 text-center text-stone-400">
+                    Forecast appears after the first week of orders.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
