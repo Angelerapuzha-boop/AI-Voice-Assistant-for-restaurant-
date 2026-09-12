@@ -16,6 +16,7 @@ import { priceLine, priceOrder } from "./pricing";
 import { getSpecial, isSpecialOrderable } from "./specials";
 import { auditLog } from "./audit";
 import { enqueueWebhookEvent } from "./webhooks";
+import { consumeInventoryForOrder, restoreInventoryForOrder } from "./inventory";
 
 /** Validation failure whose message is safe to read to the caller. */
 export class OrderValidationError extends Error {
@@ -552,6 +553,8 @@ export async function confirmOrder(
       changes: { publicOrderNumber: publicNumber },
     });
     const confirmed = (await getOrderWithItems(tx, order.id))!;
+    // Deplete stock in the SAME transaction as the confirmation.
+    await consumeInventoryForOrder(tx, confirmed);
     if (params.onConfirmed) {
       await params.onConfirmed(tx, confirmed);
     }
@@ -566,6 +569,8 @@ export async function cancelOrder(
   reason = "",
 ): Promise<Order> {
   return withTransaction(db, async (tx) => {
+    const prior = await tx.query(`SELECT status FROM orders WHERE id = $1 FOR UPDATE`, [orderId]);
+    const priorStatus = (prior.rows[0] as { status: string } | undefined)?.status;
     const res = await tx.query(
       `UPDATE orders SET status = 'cancelled',
          internal_notes = internal_notes
@@ -581,6 +586,10 @@ export async function cancelOrder(
         "CANNOT_CANCEL",
         "That order can't be cancelled at this stage.",
       );
+    }
+    // A confirmed order already depleted stock — put it back.
+    if (priorStatus && priorStatus !== "draft" && priorStatus !== "needs_review") {
+      await restoreInventoryForOrder(tx, orderId);
     }
     await auditLog(tx, {
       actor,
