@@ -20,6 +20,7 @@ const patchSchema = z
     // settings
     ownerSmsNumber: z.string().max(20),
     customerSmsEnabled: z.boolean(),
+    googleReviewUrl: z.string().max(500),
     futureOrdersEnabled: z.boolean(),
     minPrepMinutes: z.number().int().min(0).max(240),
     maxFutureHours: z.number().int().min(1).max(72),
@@ -53,6 +54,7 @@ const RESTAURANT_COLS: Record<string, string> = {
 const SETTINGS_COLS: Record<string, string> = {
   ownerSmsNumber: "owner_sms_number",
   customerSmsEnabled: "customer_sms_enabled",
+  googleReviewUrl: "google_review_url",
   futureOrdersEnabled: "future_orders_enabled",
   minPrepMinutes: "min_prep_minutes",
   maxFutureHours: "max_future_hours",

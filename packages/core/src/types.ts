@@ -38,6 +38,8 @@ export interface RestaurantSettings {
   delayNotifyThresholdSeconds: number;
   ownerSmsNumber: string;
   customerSmsEnabled: boolean;
+  /** Google review page URL; empty = review-ask SMS disabled. */
+  googleReviewUrl: string;
   futureOrdersEnabled: boolean;
   minPrepMinutes: number;
   maxFutureHours: number;

@@ -13,6 +13,7 @@ const settings: RestaurantSettings = {
   delayNotifyThresholdSeconds: 600,
   ownerSmsNumber: "",
   customerSmsEnabled: false,
+  googleReviewUrl: "",
   futureOrdersEnabled: true,
   minPrepMinutes: 20,
   maxFutureHours: 8,

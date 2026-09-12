@@ -13,6 +13,13 @@ const FIELDS: FieldDef[] = [
     source: "settings",
   },
   {
+    key: "googleReviewUrl",
+    label: "Google review link",
+    type: "text",
+    hint: "1h after an order completes, the customer is texted this review link ONCE ever. Empty = off.",
+    source: "settings",
+  },
+  {
     key: "customerSmsEnabled",
     label: "Send customers a confirmation SMS",
     type: "boolean",

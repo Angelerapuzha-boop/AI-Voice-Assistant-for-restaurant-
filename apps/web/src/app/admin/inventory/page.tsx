@@ -8,6 +8,7 @@ interface Item {
   currentQty: number;
   reorderLevel: number;
   parLevel: number;
+  category: "dish" | "raw";
   status: "ok" | "low" | "out";
 }
 
@@ -20,6 +21,7 @@ const STATUS_LABEL: Record<Item["status"], string> = { ok: "OK", low: "LOW", out
 
 export default function InventoryPage() {
   const [items, setItems] = useState<Item[]>([]);
+  const [tab, setTab] = useState<"dish" | "raw">("dish");
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<Item | null>(null);
   const [error, setError] = useState("");
@@ -55,15 +57,40 @@ export default function InventoryPage() {
     }
   }
 
-  const low = items.filter((i) => i.status !== "ok");
+  const shown = items.filter((i) => i.category === tab);
+  const low = shown.filter((i) => i.status !== "ok");
+  const lowOther = items.filter((i) => i.category !== tab && i.status !== "ok").length;
 
   return (
     <div className="max-w-4xl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">📦 Inventory</h1>
         <span className="text-xs text-stone-400">
-          Stock depletes automatically with every confirmed order · refreshes live
+          {tab === "dish"
+            ? "Depletes automatically with every confirmed order · refreshes live"
+            : "Raw purchases — count and restock when you shop"}
         </span>
+      </div>
+
+      <div className="mb-5 flex gap-2">
+        <button
+          onClick={() => setTab("dish")}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${tab === "dish" ? "bg-stone-900 text-white shadow" : "bg-white text-stone-600 shadow-sm hover:bg-stone-100"}`}
+        >
+          🍽 Main dish inventory
+        </button>
+        <button
+          onClick={() => setTab("raw")}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${tab === "raw" ? "bg-stone-900 text-white shadow" : "bg-white text-stone-600 shadow-sm hover:bg-stone-100"}`}
+        >
+          🥩 Raw materials
+          {tab !== "raw" && lowOther > 0 && (
+            <span className="ml-2 rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">{lowOther}</span>
+          )}
+        </button>
+        {tab === "raw" && lowOther > 0 && (
+          <span className="self-center text-xs font-bold text-red-600">({lowOther} dish alert{lowOther > 1 ? "s" : ""})</span>
+        )}
       </div>
 
       {low.length > 0 && (
@@ -91,7 +118,7 @@ export default function InventoryPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {shown.map((item) => (
               <tr key={item.id} className="border-t">
                 <td className="p-3 font-medium">{item.name}</td>
                 <td className={`p-3 text-right font-bold ${item.status === "out" ? "text-red-600" : item.status === "low" ? "text-amber-600" : ""}`}>
@@ -121,10 +148,10 @@ export default function InventoryPage() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && (
+            {shown.length === 0 && (
               <tr>
                 <td colSpan={6} className="p-6 text-center text-stone-400">
-                  Loading stock…
+                  {items.length === 0 ? "Loading stock…" : "No items in this tab."}
                 </td>
               </tr>
             )}

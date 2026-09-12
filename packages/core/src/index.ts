@@ -16,6 +16,7 @@ export * from "./domain/square";
 export * from "./domain/customers";
 export * from "./domain/eta";
 export * from "./domain/inventory";
+export * from "./domain/google-review";
 export * from "./domain/calls";
 export * from "./domain/audit";
 export * from "./domain/flow";

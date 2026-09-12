@@ -8,6 +8,7 @@ import {
   getSettings,
   processPendingNotifications,
   recalcQueueEstimates,
+  sweepGoogleReviewSms,
   type SmsSender,
 } from "@meatbox/core";
 
@@ -75,6 +76,9 @@ export function startMaintenanceWorker(log: (msg: string) => void): { stop: () =
           thresholdSeconds: settings.delayNotifyThresholdSeconds,
         },
       });
+      // Google-review ask: 1h after completion, once per customer ever.
+      const reviews = await sweepGoogleReviewSms(db, { restaurant, settings });
+      if (reviews > 0) log(`google-review sweep: ${reviews} ask(s) queued`);
     })()
       .catch((err: Error) => log(`maintenance pass failed: ${err.message}`))
       .finally(() => {

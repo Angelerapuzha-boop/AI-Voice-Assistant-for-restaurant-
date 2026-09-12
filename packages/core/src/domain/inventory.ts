@@ -17,6 +17,8 @@ export interface InventoryItemRow {
   currentQty: number;
   reorderLevel: number;
   parLevel: number;
+  /** 'dish' auto-depletes with orders; 'raw' is the manual purchase list. */
+  category: "dish" | "raw";
   active: boolean;
   updatedAt: Date;
 }
@@ -39,10 +41,16 @@ function numeric(row: Record<string, unknown>): InventoryItemRow {
   };
 }
 
-export async function listInventory(db: Queryable, restaurantId: string): Promise<InventoryItemRow[]> {
+export async function listInventory(
+  db: Queryable,
+  restaurantId: string,
+  category?: "dish" | "raw",
+): Promise<InventoryItemRow[]> {
   const res = await db.query(
-    `SELECT * FROM inventory_items WHERE restaurant_id = $1 AND active ORDER BY name`,
-    [restaurantId],
+    `SELECT * FROM inventory_items
+     WHERE restaurant_id = $1 AND active AND ($2::text IS NULL OR category = $2)
+     ORDER BY name`,
+    [restaurantId, category ?? null],
   );
   return (res.rows as Record<string, unknown>[]).map(numeric);
 }
