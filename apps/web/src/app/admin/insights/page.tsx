@@ -167,7 +167,7 @@ export default function InsightsPage() {
   });
 
   return (
-    <div className="max-w-7xl">
+    <div className="w-full">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">📊 Daily insights</h1>
         <span className="text-xs text-stone-400">Live — refreshes every minute</span>
