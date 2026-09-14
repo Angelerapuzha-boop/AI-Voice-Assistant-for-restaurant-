@@ -1,4 +1,4 @@
-import { getModifierGroups } from "../domain/menu";
+import { getModifierGroups, listItems } from "../domain/menu";
 import { getOrderWithItems } from "../domain/orders";
 import type { OrderWithItems } from "../types";
 import { executeTool, groupQuestion, type AgentContext, type AgentState } from "./tools";
@@ -57,6 +57,88 @@ function atAnythingElseStage(state: AgentState): boolean {
 
 function atNameStage(state: AgentState): boolean {
   return /name shall i put it under\s*$/.test(lastLine(state));
+}
+
+function atGreetingStage(state: AgentState): boolean {
+  const l = lastLine(state);
+  return l === "" || /what can i get you\s*$/.test(l);
+}
+
+// ---------------------------------------------------------------- item match
+
+const QTY_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, couple: 2, "1": 1, "2": 2, "3": 3,
+  "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
+};
+
+/** Singularise a token for menu matching ("meatboxes" -> "meatbox"). */
+function singular(w: string): string {
+  if (w.endsWith("es") && w.length > 3) return w.slice(0, -2);
+  if (w.endsWith("s") && w.length > 2) return w.slice(0, -1);
+  return w;
+}
+
+interface ItemMatch {
+  menuItemName: string;
+  quantity: number;
+}
+
+/**
+ * Deterministically recognise ONE clear menu item + quantity from a short
+ * ordering utterance ("two chicken meatboxes"). Conservative: leftover
+ * content words (a second item, inline options, unknown words) => null so
+ * the LLM handles anything complex. Ambiguity ("meatbox" alone) => null.
+ */
+function matchMenuItem(
+  utterance: string,
+  items: { name: string; aliases: string[] }[],
+): ItemMatch | null {
+  // Strip fillers, ordering verbs and greeting words so only the item
+  // (and a quantity) remain.
+  const STRIP = new Set([
+    "grab", "get", "can", "i", "want", "would", "like", "have", "id",
+    "hey", "hi", "hello", "ok", "okay", "so", "look", "see", "gimme", "give",
+    "us", "could", "lemme", "let",
+  ]);
+  const tokens = normalise(utterance)
+    .split(" ")
+    .filter((w) => w && !FILLER_WORDS.has(w) && !STRIP.has(w));
+  if (tokens.length === 0) return null;
+
+  // Quantity: the first number word anywhere (menu names carry no numbers).
+  let quantity = 1;
+  const itemWords: string[] = [];
+  let qtyTaken = false;
+  for (const t of tokens) {
+    if (!qtyTaken && QTY_WORDS[t] !== undefined) {
+      quantity = QTY_WORDS[t]!;
+      qtyTaken = true;
+    } else {
+      itemWords.push(t);
+    }
+  }
+  if (itemWords.length === 0) return null;
+
+  const itemTokens = itemWords.map(singular);
+  // Space-insensitive form so "meat box" == "meatbox" (STT splits words
+  // differently than the menu spells them).
+  const uttSquished = itemTokens.join("");
+
+  // Clean match: the utterance's content (minus quantity) is EXACTLY one
+  // menu item's name (space-insensitive, singularised). Anything with
+  // leftover words (a second item, inline options like "large"/"garlic")
+  // is left to the LLM.
+  const matched = new Set<string>();
+  for (const item of items) {
+    for (const label of [item.name, ...item.aliases]) {
+      const nameSquished = normalise(label).split(" ").filter(Boolean).map(singular).join("");
+      if (nameSquished && nameSquished === uttSquished) matched.add(item.name);
+    }
+  }
+  if (matched.size !== 1) return null; // none or ambiguous -> LLM
+
+  return { menuItemName: [...matched][0]!, quantity };
 }
 
 // ---------------------------------------------------------------- read-back
@@ -278,6 +360,38 @@ export async function tryFastPath(
       return { handled: true, say: terseReadback(order), toolCalls: calls, kind: "name_readback" };
     }
     return NOT_HANDLED;
+  }
+
+  // ---- deterministic item ordering: a clear menu item at the greeting or
+  // after "anything else?" is added without the LLM ("two chicken meatboxes").
+  if (!hasPending && (atGreetingStage(state) || atAnythingElseStage(state))) {
+    const items = await listItems(ctx.db, ctx.restaurant.id);
+    const match = matchMenuItem(
+      text,
+      items.map((i) => ({ name: i.name, aliases: i.aliases })),
+    );
+    if (match) {
+      if (!ctx.settings.acceptingOrders) return NOT_HANDLED; // paused -> LLM apologises
+      if (!state.draftOrderId) {
+        const draft = await run("create_order_draft", { orderType: "takeaway" });
+        if (draft.error) return NOT_HANDLED;
+      }
+      const result = await run("add_order_item", {
+        menuItemName: match.menuItemName,
+        quantity: match.quantity,
+      });
+      // Missing a required option (base/sauce) -> executor stashed pending +
+      // returned the exact question to ask.
+      if (result.itemSavedAsPending && typeof result.ask === "string") {
+        return { handled: true, say: result.ask, toolCalls: calls, kind: "item_pending" };
+      }
+      if (!result.error) {
+        return { handled: true, say: "Anything else?", toolCalls: calls, kind: "item_added" };
+      }
+      return NOT_HANDLED; // add failed unexpectedly -> LLM
+    }
+    // No clean single-item match at the greeting -> LLM understands it.
+    if (atGreetingStage(state)) return NOT_HANDLED;
   }
 
   // ---- completing a pending item whose required option was missing

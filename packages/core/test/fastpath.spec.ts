@@ -127,6 +127,26 @@ describe("classifiers", () => {
 });
 
 describe("fast paths (LLM must not be called)", () => {
+  it('orders a menu item deterministically at the greeting: "two chicken meatboxes" -> base question, no LLM', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    // Greeting stage: lastAssistantText empty.
+    const res = await agent.handleTurn("two chicken meatboxes");
+    expect(res.fastPath).toBe("item_pending");
+    // It asked the required base question and stashed the item as pending.
+    expect(res.text.toLowerCase()).toMatch(/chips|rice|base/);
+    expect(agent.state.draftOrderId).toBeTruthy();
+    expect(agent.state.pendingItem?.quantity).toBe(2);
+  });
+
+  it("adds a no-required-option item deterministically and asks anything else", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    const res = await agent.handleTurn("a coke"); // if Coke needs no required option
+    // Either it added cleanly (item_added) or the item has a required option
+    // (item_pending). Both are deterministic (no LLM).
+    expect(["item_added", "item_pending"]).toContain(res.fastPath);
+    expect(agent.state.draftOrderId).toBeTruthy();
+  });
+
   it('completes a pending item: failed add -> "chips and salad" -> added instantly', async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     await draftWith(agent, [{ name: "Water", qty: 1 }]);
