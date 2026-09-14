@@ -249,14 +249,18 @@ async function main(): Promise<void> {
         },
       },
       tts: {
-        // English agents must use turbo or flash v2 (platform rule).
-        model_id: "eleven_turbo_v2",
+        // flash_v2: ~200ms faster per turn than turbo_v2 (Kevin's
+        // end-of-call latency ask); revert to eleven_turbo_v2 if the
+        // ear-test says the texture dropped too much.
+        model_id: "eleven_flash_v2",
         voice_id: env.ELEVENLABS_VOICE_ID,
         // Clarity on an 8kHz phone line: steadier delivery, stronger voice
         // presence, fractionally slower speech.
         stability: 0.65,
         similarity_boost: 0.9,
         speed: 0.97,
+        // Max streaming-latency optimizations: begin speaking sooner.
+        optimize_streaming_latency: 4,
       },
       asr: {
         quality: "high",
