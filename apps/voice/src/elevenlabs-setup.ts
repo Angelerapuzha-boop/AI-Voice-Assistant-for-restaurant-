@@ -53,6 +53,12 @@ const EXCLUDED_TOOLS = new Set([
 // forced pre-ack there would just re-create the two-gap stagger.
 const PRE_SPEECH_TOOLS = new Set(["repeat_last_order", "confirm_order"]);
 
+// ASYNC was tested 2026-09-14 and REVERTED: fire-and-forget gave the
+// model no result feedback, so it spammed add/update/remove (a dozen
+// calls for a 2-item order) and corrupted the cart. Correctness wins —
+// all order tools stay synchronous. (Empty set = all immediate.)
+const ASYNC_TOOLS = new Set<string>();
+
 function fail(msg: string): never {
   console.error(`\n✖ ${msg}`);
   process.exit(1);
@@ -137,6 +143,7 @@ function webhookToolConfig(def: LlmToolDef, authHeader: unknown): Record<string,
     description: def.description,
     response_timeout_secs: 15,
     pre_tool_speech: PRE_SPEECH_TOOLS.has(def.name) ? "force" : "auto",
+    execution_mode: ASYNC_TOOLS.has(def.name) ? "async" : "immediate",
     api_schema: {
       url: `${env.VOICE_PUBLIC_URL.replace(/\/$/, "")}/elevenlabs/tools/${def.name}`,
       method: "POST",
