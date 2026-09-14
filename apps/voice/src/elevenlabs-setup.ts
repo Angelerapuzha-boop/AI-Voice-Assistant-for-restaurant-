@@ -255,7 +255,8 @@ async function main(): Promise<void> {
         // presence, fractionally slower speech.
         stability: 0.65,
         similarity_boost: 0.9,
-        speed: 0.97,
+        // Full pace: the 3% slow-down for clarity read as sluggishness.
+        speed: 1.0,
         // Max streaming-latency optimizations: begin speaking sooner.
         optimize_streaming_latency: 4,
       },
