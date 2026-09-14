@@ -1,5 +1,6 @@
 import { getModifierGroups, listItems } from "../domain/menu";
 import { getOrderWithItems } from "../domain/orders";
+import { speakCents } from "../money";
 import type { OrderWithItems } from "../types";
 import { executeTool, groupQuestion, type AgentContext, type AgentState } from "./tools";
 import type { ToolCallRecord } from "./engine";
@@ -48,20 +49,32 @@ function lastLine(state: AgentState): string {
 }
 
 function atConfirmStage(state: AgentState): boolean {
-  return /correct\s*$/.test(lastLine(state));
+  // Both close styles: item read-back ends "Correct?", total-only close ends
+  // "Confirm?". Either way the next "yes" is the final confirmation.
+  return /(correct|confirm)\s*$/.test(lastLine(state));
 }
 
 function atAnythingElseStage(state: AgentState): boolean {
-  return /anything else\s*$/.test(lastLine(state));
+  // "Anything else?", "Anything else for you?", "Was there anything else?" —
+  // the LLM varies the wording, so match the phrase anywhere in the line.
+  return /anything else/.test(lastLine(state));
 }
 
 function atNameStage(state: AgentState): boolean {
-  return /name shall i put it under\s*$/.test(lastLine(state));
+  const l = lastLine(state);
+  if (!/\bname\b/.test(l)) return false;
+  // The assistant is asking for the customer's name — our canonical line OR
+  // any LLM rephrase ("I still need a name for the order", "what was the
+  // name", "what's your name"). Broad so the name answer is fast whoever
+  // asked. Excludes lines that merely contain a name (the close has none).
+  return /(name shall i put it under|name for the order|need a name|get a name|grab a name|your name|the name|whats? the name|what.{0,8}name)/.test(l);
 }
 
 function atGreetingStage(state: AgentState): boolean {
-  const l = lastLine(state);
-  return l === "" || /what can i get you\s*$/.test(l);
+  // Start of call: nothing ordered yet. Keyed off state, not the greeting's
+  // exact words — the LLM varies its opener ("what can I get started for
+  // you?"), and the first menu item must add fast however it greeted.
+  return !state.draftOrderId;
 }
 
 // ---------------------------------------------------------------- item match
@@ -188,6 +201,59 @@ export function terseReadback(order: OrderWithItems): string {
   }
   return `${text}. Correct?`;
 }
+
+/**
+ * Total-only close (owner rule: no item recital — state the grand total once
+ * with the name and type, confirm once). "That's 42 dollars 80, takeaway for
+ * Sam. Confirm?"
+ */
+export function spokenClose(order: OrderWithItems): string {
+  const type = order.orderType === "dine_in" ? "dine-in" : "takeaway";
+  const name = order.customerName.trim();
+  return `That's ${speakCents(order.totalCents)}, ${type}${name ? ` for ${name}` : ""}. Confirm?`;
+}
+
+// ---------------------------------------------------------------- name capture
+
+/**
+ * Extract a spoken customer name -> title case, or null if it doesn't look
+ * like a name (too long, too many words, empty after cleaning).
+ */
+function cleanName(text: string): string | null {
+  // A finish ("no, that's it") or confirm ("yep, that's right") is NOT a name,
+  // even at the name stage — let the LLM re-ask rather than name the order "No".
+  if (isFinished(text) || isYes(text)) return null;
+  const cleaned = text
+    .replace(/\b(it's|its|it is|the name is|name is|name's|names|under|for|put it under|this is|thanks|thank you|cheers|please|mate)\b/gi, " ")
+    .replace(/[^a-zA-Z\s'-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = cleaned.split(" ").filter(Boolean);
+  if (words.length < 1 || words.length > 3) return null;
+  if (cleaned.length < 2 || cleaned.length > 40) return null;
+  // Compound answer (name + order type/timing/size, e.g. "Daniel, pickup
+  // ASAP") -> let the LLM set all the fields; don't guess a name from it.
+  if (words.some((w) => NON_NAME_WORDS.has(w.toLowerCase()) || QTY_WORDS[w.toLowerCase()] !== undefined)) {
+    return null;
+  }
+  return words.map((w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
+// Caller volunteers a name at "anything else?" with an explicit lead-in
+// ("it's Kevin", "under Sam", "the name's Dave") — a bare unknown word stays
+// with the LLM (could be a garbled item, not a name).
+const NAME_LEADIN_RE =
+  /^(?:it'?s|its|name'?s|names|the name is|name is|under|put it under|this is)\s+(.+)$/i;
+
+// Words that can follow a lead-in but are NOT names (order type, party size,
+// acknowledgements) — reject so "it's for here" / "it's fine" never become names.
+const NON_NAME_WORDS = new Set([
+  "here", "there", "now", "later", "takeaway", "pickup", "pick", "up",
+  "delivery", "dine", "dinein", "in", "yes", "no", "yeah", "nah", "ok",
+  "okay", "done", "that", "all", "it", "fine", "good", "cool", "one", "two",
+  "three", "four", "five", "six", "couple", "people", "us", "me",
+  "asap", "tonight", "today", "tomorrow", "minutes", "mins", "oclock", "pm", "am",
+]);
 
 // ---------------------------------------------------------------- missing required
 
@@ -337,27 +403,19 @@ export async function tryFastPath(
         kind: "ask_name",
       };
     }
-    state.summarySeq = state.mutationSeq; // spoken read-back = summary read
-    return { handled: true, say: terseReadback(order), toolCalls: calls, kind: "readback" };
+    state.summarySeq = state.mutationSeq; // total stated = summary read
+    return { handled: true, say: spokenClose(order), toolCalls: calls, kind: "close" };
   }
 
   // ---- name answer after our deterministic name question
   if (atNameStage(state) && state.draftOrderId) {
-    const cleaned = text
-      .replace(/\b(it's|its|it is|the name is|name is|under|for|put it under)\b/gi, " ")
-      .replace(/[^a-zA-Z\s'-]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const words = cleaned.split(" ").filter(Boolean);
-    if (words.length >= 1 && words.length <= 3 && cleaned.length >= 2 && cleaned.length <= 40) {
-      const name = words
-        .map((w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase())
-        .join(" ");
+    const name = cleanName(text);
+    if (name) {
       await run("set_order_details", { customerName: name });
       const order = await getOrderWithItems(ctx.db, state.draftOrderId);
       if (!order) return NOT_HANDLED;
       state.summarySeq = state.mutationSeq;
-      return { handled: true, say: terseReadback(order), toolCalls: calls, kind: "name_readback" };
+      return { handled: true, say: spokenClose(order), toolCalls: calls, kind: "name_close" };
     }
     return NOT_HANDLED;
   }
@@ -392,6 +450,39 @@ export async function tryFastPath(
     }
     // No clean single-item match at the greeting -> LLM understands it.
     if (atGreetingStage(state)) return NOT_HANDLED;
+  }
+
+  // ---- caller volunteers a name at "anything else?" ("it's Kevin", "under
+  // Sam") instead of saying "no" first: finish + set name + total-only close,
+  // all deterministic. Requires an explicit name lead-in so a garbled item
+  // word can't be mistaken for a name; a bare word stays with the LLM.
+  const leadIn = NAME_LEADIN_RE.exec(text.trim());
+  if (leadIn && atAnythingElseStage(state) && state.draftOrderId && !hasPending && !isYes(text)) {
+    const captured = normalise(leadIn[1]!);
+    const capTokens = captured.split(" ").filter(Boolean);
+    const isName =
+      capTokens.length >= 1 &&
+      capTokens.length <= 2 &&
+      capTokens.every((t) => !NON_NAME_WORDS.has(t) && QTY_WORDS[t] === undefined);
+    const name = isName ? cleanName(leadIn[1]!) : null;
+    if (name) {
+      const order = await getOrderWithItems(ctx.db, state.draftOrderId);
+      if (
+        order &&
+        order.status === "draft" &&
+        order.items.length > 0 &&
+        !order.customerName.trim() &&
+        (await missingRequiredGroups(ctx, order)).length === 0 &&
+        (await optionalGroupTargets(ctx, order, text)).length === 0
+      ) {
+        await run("set_order_details", { customerName: name });
+        const fresh = await getOrderWithItems(ctx.db, state.draftOrderId);
+        if (fresh) {
+          state.summarySeq = state.mutationSeq;
+          return { handled: true, say: spokenClose(fresh), toolCalls: calls, kind: "name_close" };
+        }
+      }
+    }
   }
 
   // ---- completing a pending item whose required option was missing

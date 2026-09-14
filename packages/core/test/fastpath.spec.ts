@@ -138,6 +138,16 @@ describe("fast paths (LLM must not be called)", () => {
     expect(agent.state.pendingItem?.quantity).toBe(2);
   });
 
+  it("orders the first item fast even when the LLM worded the greeting differently", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    // A varied opener must not disable the deterministic item path.
+    agent.state.lastAssistantText = "Hey there! What can I get started for you?";
+    const res = await agent.handleTurn("two chicken meatboxes");
+    expect(res.fastPath).toBe("item_pending");
+    expect(agent.state.draftOrderId).toBeTruthy();
+    expect(agent.state.pendingItem?.quantity).toBe(2);
+  });
+
   it("adds a no-required-option item deterministically and asks anything else", async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     const res = await agent.handleTurn("a coke"); // if Coke needs no required option
@@ -184,7 +194,7 @@ describe("fast paths (LLM must not be called)", () => {
     }
   });
 
-  it('finishes: "nah that\'s it" -> terse read-back when the name is known', async () => {
+  it('finishes: "nah that\'s it" -> total-only close when the name is known (no item recital)', async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     await draftWith(
       agent,
@@ -193,10 +203,11 @@ describe("fast paths (LLM must not be called)", () => {
     );
     agent.state.lastAssistantText = "Anything else?";
     const turn = await agent.handleTurn("nah that's it");
-    expect(turn.fastPath).toBe("readback");
-    expect(turn.text.toLowerCase()).toContain("two chicken meatboxes");
-    expect(turn.text.toLowerCase()).toContain("garlic");
-    expect(turn.text).toMatch(/Correct\?$/);
+    expect(turn.fastPath).toBe("close");
+    // Owner rule: grand total + name + type, confirm once, NO item read-back.
+    expect(turn.text).toMatch(/^That's .+, takeaway for Kev\. Confirm\?$/);
+    expect(turn.text.toLowerCase()).toContain("dollars");
+    expect(turn.text.toLowerCase()).not.toContain("meatbox");
   });
 
   it("asks for a name when finishing without one, then reads back after the answer", async () => {
@@ -209,10 +220,54 @@ describe("fast paths (LLM must not be called)", () => {
     expect(turn1.fastPath).toBe("ask_name");
     expect(turn1.text).toBe("What name shall I put it under?");
     const turn2 = await agent.handleTurn("it's Kevin");
-    expect(turn2.fastPath).toBe("name_readback");
-    expect(turn2.text).toMatch(/Correct\?$/);
+    expect(turn2.fastPath).toBe("name_close");
+    expect(turn2.text).toMatch(/^That's .+, takeaway for Kevin\. Confirm\?$/);
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.customerName).toBe("Kevin");
+  });
+
+  it("captures the name fast even when the LLM re-asked with different wording", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [
+      { name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] },
+    ]);
+    // The LLM rephrased the name request — the answer must still be fast.
+    agent.state.lastAssistantText = "I still need a name for the order.";
+    const turn = await agent.handleTurn("Kevin");
+    expect(turn.fastPath).toBe("name_close");
+    expect(turn.text).toMatch(/^That's .+, takeaway for Kevin\. Confirm\?$/);
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.customerName).toBe("Kevin");
+  });
+
+  it('caller volunteers a name at "anything else?" -> finish + total-only close, no LLM', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [
+      { name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] },
+    ]);
+    agent.state.lastAssistantText = "Anything else?";
+    // No "no" first — the caller just gives a name with a lead-in.
+    const turn = await agent.handleTurn("under Sam");
+    expect(turn.fastPath).toBe("name_close");
+    expect(turn.text).toMatch(/^That's .+, takeaway for Sam\. Confirm\?$/);
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.customerName).toBe("Sam");
+  });
+
+  it('confirms on the final "yep" after a total-only close ("Confirm?")', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(
+      agent,
+      [{ name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] }],
+      "Dana",
+    );
+    agent.state.summarySeq = agent.state.mutationSeq;
+    agent.state.lastAssistantText = "That's nineteen ninety, takeaway for Dana. Confirm?";
+    const turn = await agent.handleTurn("yep");
+    expect(turn.fastPath).toBe("confirm_yes");
+    expect(turn.endCall).toBe(true);
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.status).toBe("new");
   });
 
   it('confirms on the final "yep": order stored, closing line, call ends', async () => {
@@ -336,6 +391,28 @@ describe("fall-through to the LLM", () => {
     agent.state.lastAssistantText = "Anything else?";
     const turn = await agent.handleTurn("what's in the meatbox actually");
     expect(turn.fastPath).toBeUndefined();
+  });
+
+  it('a finish phrase at the name stage is NOT taken as the name (falls to LLM)', async () => {
+    const agent = new OrderAgent(scripted, agentCtx());
+    await draftWith(agent, [{ name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] }]);
+    agent.state.lastAssistantText = "What name shall I put it under?";
+    // STT split an earlier "no, that's it" onto the name turn — must not become a name.
+    const turn = await agent.handleTurn("No, that's it. Thanks.");
+    expect(turn.fastPath).toBeUndefined();
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.customerName).toBe("");
+  });
+
+  it('a bare unknown word at "anything else?" is NOT guessed as a name', async () => {
+    const agent = new OrderAgent(scripted, agentCtx());
+    await draftWith(agent, [{ name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] }]);
+    agent.state.lastAssistantText = "Anything else?";
+    // Could be a garbled item — no explicit name lead-in, so let the LLM handle it.
+    const turn = await agent.handleTurn("brint");
+    expect(turn.fastPath).toBeUndefined();
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.customerName).toBe("");
   });
 
   it('"no" at the read-back (a correction) falls through', async () => {
