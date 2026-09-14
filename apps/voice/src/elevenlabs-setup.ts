@@ -34,18 +34,73 @@ const API = "https://api.elevenlabs.io";
 const AGENT_NAME = "Meatbox WA — Phone Orders";
 const SECRET_NAME = "meatbox-bridge-secret";
 
-// end_call is the platform's built-in hang-up; create_order_draft happens
-// automatically inside the bridge's add_order_item (first-turn latency);
-// the others are covered by the in-prompt menu catalog and only add
-// tool-choice latency.
+// The order is now built in ONE call (build_order) at the end, so the
+// per-item add/update/remove/draft/details/summary tools are removed from
+// the agent entirely — they were the per-turn latency source. The agent
+// collects items conversationally from the in-prompt menu, then submits
+// once. Menu-navigation tools stay off too (menu is in the prompt).
 const EXCLUDED_TOOLS = new Set([
   "end_call",
   "create_order_draft",
+  "add_order_item",
+  "update_order_item",
+  "remove_order_item",
+  "set_order_details",
+  "get_order_summary",
+  "calculate_order_total",
   "get_menu_category",
   "get_available_modifiers",
   "check_item_availability",
-  "calculate_order_total",
 ]);
+
+// The synthetic batch tool the agent calls once when the order is complete.
+const BUILD_ORDER_TOOL = {
+  type: "webhook",
+  name: "build_order",
+  description:
+    "Submit the WHOLE order at once when the caller has finished and you have a name. Pass every item. Returns the total. Call again with the full list if the caller changes anything.",
+  response_timeout_secs: 15,
+  pre_tool_speech: "force",
+  execution_mode: "immediate",
+  api_schema: {
+    url: "", // filled in main() with the bridge URL
+    method: "POST",
+    request_headers: {} as Record<string, unknown>,
+    request_body_schema: {
+      type: "object",
+      properties: {
+        conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
+        customerName: { type: "string", description: "Name for the order" },
+        orderType: { type: "string", enum: ["takeaway", "dine_in"], description: "takeaway unless dining in" },
+        pickupTime: { type: "string", description: "'ASAP', or ISO 8601 like 2026-09-09T19:20:00+08:00 when the kitchen is closed" },
+        items: {
+          type: "array",
+          description: "Every item ordered",
+          items: {
+            type: "object",
+            description: "One order line",
+            properties: {
+              menuItemName: { type: "string", description: "Exact item name from the MENU section" },
+              modifierNames: {
+                type: "array",
+                description: "Chosen options (base, sauce, size, flavour)",
+                items: { type: "string", description: "One option name" },
+              },
+              quantity: { type: "integer", description: "How many" },
+              removals: {
+                type: "array",
+                description: "Ingredients to leave out",
+                items: { type: "string", description: "One ingredient to omit" },
+              },
+            },
+            required: ["menuItemName", "quantity"],
+          },
+        },
+      },
+      required: ["conversation_id", "items", "customerName"],
+    },
+  },
+};
 
 // Force a spoken ack only where the caller would otherwise wait on a
 // genuinely slow round-trip (final confirm, history load). Item adds
@@ -204,21 +259,28 @@ async function main(): Promise<void> {
       (t) => [t.tool_config.name, t.id],
     ),
   );
+  // build_order is a synthetic batch tool (not in TOOL_DEFS) that submits
+  // the whole order in one webhook — set its URL + auth here.
+  const buildOrderConfig = JSON.parse(JSON.stringify(BUILD_ORDER_TOOL)) as typeof BUILD_ORDER_TOOL;
+  buildOrderConfig.api_schema.url = `${env.VOICE_PUBLIC_URL.replace(/\/$/, "")}/elevenlabs/tools/build_order`;
+  buildOrderConfig.api_schema.request_headers = { "x-bridge-secret": authHeader };
+  const configs = [buildOrderConfig, ...wanted.map((def) => webhookToolConfig(def, authHeader))];
+
   const toolIds: string[] = [];
-  for (const def of wanted) {
-    const config = webhookToolConfig(def, authHeader);
-    const id = existing.get(def.name);
+  for (const config of configs) {
+    const cfgName = String((config as { name: string }).name);
+    const id = existing.get(cfgName);
     if (id) {
       const res = await api("PATCH", `/v1/convai/tools/${id}`, { tool_config: config });
-      if (!res.ok) fail(`updating tool ${def.name} failed`);
+      if (!res.ok) fail(`updating tool ${config.name} failed`);
       toolIds.push(id);
-      console.log(`✔ tool ${def.name} updated (${id})`);
+      console.log(`✔ tool ${config.name} updated (${id})`);
     } else {
       const res = await api("POST", "/v1/convai/tools", { tool_config: config });
-      if (!res.ok) fail(`creating tool ${def.name} failed`);
+      if (!res.ok) fail(`creating tool ${config.name} failed`);
       const newId = (res.data as { id: string }).id;
       toolIds.push(newId);
-      console.log(`✔ tool ${def.name} created (${newId})`);
+      console.log(`✔ tool ${config.name} created (${newId})`);
     }
   }
 

@@ -45,9 +45,10 @@ export const ELEVENLABS_PROMPT_APPENDIX = `
 PLATFORM NOTES
 - To hang up, use the end_call tool AFTER your goodbye line.
 - Every tool needs conversation_id — it is filled in automatically.
-- There is NO create_order_draft tool: the FIRST add_order_item starts the order automatically. When the caller states an item, call add_order_item immediately — nothing needs to happen first.
-- SPEAK BEFORE TOOLS — this is the most important latency rule. The MENU section already tells you every item's options, so you NEVER need a tool result to know your next line. In every turn, output your spoken reply FIRST (ack + next question in one breath: "Yep — chips and salad, or rice and salad?"), and put the add_order_item / update tool call AFTER your words. This lets the caller hear the next question instantly while the item saves silently in the background — no waiting on the tool.
-- Speak EXACTLY ONCE per turn. Tool results are silent data you never read aloud — after a tool returns, say NOTHING (unless it returned an error or an 'ask' question you haven't voiced yet). Never repeat a line you already said.
+- ORDER-TAKING IS TOOL-FREE UNTIL THE END. Do NOT call any tool while taking the order. Listen, and using the MENU section (which lists every item and its options), just TALK: acknowledge and ask the next needed question. This keeps replies instant — no waiting on anything. Keep the running order in your head.
+- When the caller is finished AND you have a name, call build_order ONCE with every item, the name, the type, and (if the kitchen is closed) the pickup time. It returns the total. Then say the total and confirm. This is the ONLY tool call for the whole order.
+- If build_order comes back with 'problems' (an item still needs a choice), ask ONLY those questions, then call build_order again with the complete list. If the caller changes anything, call build_order again with the full corrected list.
+- Speak EXACTLY ONCE per turn. Never repeat a line you already said.
 - VARY your acknowledgements like a real person: rotate between "Yep.", "No worries.", "Sure.", "Righto.", "Easy.", "Got it." — NEVER the same ack twice in a row, and never more than one ack in a single reply ("Just a sec. No worries." is wrong — pick one).
 - NEVER say the same sentence or question twice. If you already said it, do not say it again in your next reply.
 - FAKE/PRANK CALLS: if the caller is clearly not ordering (jokes, absurd requests, abuse, random talk, kids mucking around): give ONE gentle redirect — "Are you after some food today?" If it continues, say "I'll let you go — call back when you'd like to order. Bye." and end_call. Never repeat offensive words. Never confirm an order you suspect is fake — flag_for_review instead. Stay calm and polite no matter what is said.
@@ -65,7 +66,7 @@ PLATFORM NOTES
 - Acks are the ack ONLY: "Got it." — NEVER "Got it. Let me add that." / "Let me update that." / "Let me lock that in." No narration of your own actions, ever; people don't describe what they're doing.
 - add_order_item pending flow: when it returns itemSavedAsPending with an 'ask' question, say ONLY that question. When the caller answers, call add_order_item AGAIN for the SAME item with their chosen option included in modifierNames.
 - confirm_order requires caller_final_words: the caller's EXACT latest words agreeing to the order (for example "yep" or "yes lock it in"). Quote them verbatim — never paraphrase, never invent. If the caller has not clearly agreed, do not call it.
-- NO READ-BACK OF ITEMS. Do NOT list the order contents back. When the caller is done and you have a name, get the total with get_order_summary and say ONLY the total plus name/type in one short line: "That's thirteen ninety five, takeaway for Kevin. Confirm?" (add "for pickup at five pm" if the kitchen is closed). Never recite the items.
+- NO READ-BACK OF ITEMS. After build_order returns, say ONLY the total plus name/type in one short line: "That's thirteen ninety five, takeaway for Kevin. Confirm?" (add "for pickup at five pm" if the kitchen is closed). Never recite the items.
 - CONFIRM ONCE — the moment the caller agrees in ANY form (yes, yeah, yep, correct, good to go, that works, lock it in, go ahead), call confirm_order immediately with their words. NEVER ask twice, never "just to be sure", never re-state the order. Only re-open if the caller themselves asks to change something.`;
 
 const IDLE_CHECK_MS = 3 * 60_000; // consider finalising after 3 min silence
@@ -303,6 +304,14 @@ export class ElevenLabsBridge {
     const input: Record<string, unknown> = { ...body };
     delete input.conversation_id;
 
+    // build_order: the whole order in ONE webhook. The agent collects
+    // items conversationally (menu is in its prompt — zero per-item
+    // round-trips), then calls this once at the end. All the adds run
+    // locally here (~20ms each) instead of N slow ElevenLabs->AU trips.
+    if (name === "build_order") {
+      return { status: 200, body: await this.buildOrder(session, input) };
+    }
+
     // First-turn latency: the agent's opening "one meatbox please" must not
     // cost two sequential webhook round-trips. add_order_item auto-creates
     // the draft, so create_order_draft never needs its own call.
@@ -339,6 +348,71 @@ export class ElevenLabsBridge {
     }
     this.log(`[11l] tool ${name} ${Date.now() - t0}ms`, { conversationId });
     return { status: 200, body: result };
+  }
+
+  /**
+   * Build the entire order in one webhook: create the draft, add every
+   * item, set name/type/pickup, and return the total. Rebuilds cleanly on
+   * a correction (the agent re-sends the full list). All executeTool calls
+   * run locally, so this is ONE ElevenLabs->server round-trip for the whole
+   * order instead of one per item.
+   */
+  private async buildOrder(
+    session: BridgeSession,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const items = Array.isArray(input.items) ? input.items : [];
+    if (items.length === 0) return { error: "No items given. Ask the caller what they'd like." };
+
+    // A correction resends everything: cancel the old draft and start fresh.
+    if (session.state.draftOrderId) {
+      await executeTool(session.ctx, session.state, "cancel_order", { reason: "rebuild" });
+      session.state.draftOrderId = null;
+    }
+    const draft = await executeTool(session.ctx, session.state, "create_order_draft", {
+      customerName: input.customerName ? String(input.customerName) : undefined,
+      orderType: input.orderType === "dine_in" ? "dine_in" : "takeaway",
+    });
+    if (draft.error) return draft;
+
+    const problems: string[] = [];
+    for (const raw of items) {
+      const it = raw as Record<string, unknown>;
+      const res = await executeTool(session.ctx, session.state, "add_order_item", {
+        menuItemName: it.menuItemName ?? it.name,
+        modifierNames: it.modifierNames ?? it.options,
+        quantity: it.quantity ?? 1,
+        removals: it.removals,
+        specialInstructions: it.specialInstructions,
+      });
+      if (res.error) {
+        // A missing required option comes back as an 'ask' — surface it so
+        // the agent asks that one question, then re-sends build_order.
+        problems.push(
+          res.ask
+            ? `${String(it.menuItemName ?? it.name)}: ${String(res.ask)}`
+            : `${String(it.menuItemName ?? it.name)}: ${String(res.error)}`,
+        );
+      }
+    }
+
+    if (input.customerName || input.orderType || input.pickupTime) {
+      await executeTool(session.ctx, session.state, "set_order_details", {
+        customerName: input.customerName ? String(input.customerName) : undefined,
+        orderType: input.orderType === "dine_in" ? "dine_in" : "takeaway",
+        pickupTime: input.pickupTime ? String(input.pickupTime) : undefined,
+      });
+    }
+
+    const summary = await executeTool(session.ctx, session.state, "get_order_summary", {});
+    return {
+      ...summary,
+      problems: problems.length > 0 ? problems : undefined,
+      note:
+        problems.length > 0
+          ? "Some items need a choice — ask ONLY those questions, then call build_order again with the complete list."
+          : "Order built. Say the total with name and type, then confirm on the caller's yes.",
+    };
   }
 
   /** Post-call webhook (raw body already signature-verified by the route). */
