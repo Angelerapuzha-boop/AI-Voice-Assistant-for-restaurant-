@@ -268,10 +268,11 @@ async function main(): Promise<void> {
         turn_timeout: 7,
         // Eager: respond the moment the caller stops — "no silence" spec.
         turn_eagerness: "eager",
-        // Any slow generation gets spoken cover instead of dead air.
+        // Rare slow generations get one tiny human sound, never a phrase
+        // (Kevin: "just a sec" repeats read as lag).
         soft_timeout_config: {
-          timeout_seconds: 3,
-          message: "Just a sec.",
+          timeout_seconds: 4,
+          message: "Mm-hm.",
           use_llm_generated_message: false,
           max_soft_timeouts_per_generation: 1,
         },
