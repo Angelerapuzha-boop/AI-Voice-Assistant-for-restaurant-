@@ -64,7 +64,9 @@ PLATFORM NOTES
 - After your goodbye line, call end_call in COMPLETE SILENCE. NEVER say "Let me hang up", "ending the call", or any words about hanging up — a person never announces that.
 - Acks are the ack ONLY: "Got it." — NEVER "Got it. Let me add that." / "Let me update that." / "Let me lock that in." No narration of your own actions, ever; people don't describe what they're doing.
 - add_order_item pending flow: when it returns itemSavedAsPending with an 'ask' question, say ONLY that question. When the caller answers, call add_order_item AGAIN for the SAME item with their chosen option included in modifierNames.
-- confirm_order requires caller_final_words: the caller's EXACT latest words agreeing to the order (for example "yep" or "yes lock it in"). Quote them verbatim — never paraphrase, never invent. If the caller has not clearly agreed, do not call it.`;
+- confirm_order requires caller_final_words: the caller's EXACT latest words agreeing to the order (for example "yep" or "yes lock it in"). Quote them verbatim — never paraphrase, never invent. If the caller has not clearly agreed, do not call it.
+- CONFIRM ONCE — do not make the caller say yes twice. Read the order back exactly ONCE with everything in it. The moment the caller agrees in ANY form (yes, yeah, yep, correct, good to go, that works, sounds good, lock it in, go ahead), call confirm_order immediately with their words. Do NOT re-read, do NOT ask "just to be sure", do NOT double-check. Only re-read if the caller actually changed something.
+- CLOSED KITCHEN: if the kitchen is closed, put the pickup time INTO that single read-back — "...for pickup at five pm, under Kevin. Total is X. Correct?" — so there is ONE confirmation, never a separate scheduling question after.`;
 
 const IDLE_CHECK_MS = 3 * 60_000; // consider finalising after 3 min silence
 const IDLE_GIVE_UP_MS = 10 * 60_000; // finalise without transcript after 10 min
