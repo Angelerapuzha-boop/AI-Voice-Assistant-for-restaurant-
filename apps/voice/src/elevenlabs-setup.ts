@@ -47,14 +47,11 @@ const EXCLUDED_TOOLS = new Set([
   "calculate_order_total",
 ]);
 
-// Force a spoken ack before the slowest-feeling tools only. On quick
-// updates the forced pre-speech made the model ask the question twice
-// (before AND after the tool) — those run on "auto".
-const PRE_SPEECH_TOOLS = new Set([
-  "add_order_item",
-  "repeat_last_order",
-  "confirm_order",
-]);
+// Force a spoken ack only where the caller would otherwise wait on a
+// genuinely slow round-trip (final confirm, history load). Item adds
+// speak their FULL combined line up front (one-utterance rule), so a
+// forced pre-ack there would just re-create the two-gap stagger.
+const PRE_SPEECH_TOOLS = new Set(["repeat_last_order", "confirm_order"]);
 
 function fail(msg: string): never {
   console.error(`\n✖ ${msg}`);
