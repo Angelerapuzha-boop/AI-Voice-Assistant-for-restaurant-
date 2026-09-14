@@ -66,6 +66,21 @@ export function conversationRelayTwiml(params: {
 }
 
 /**
+ * Custom media-stream pipeline: bidirectional audio over a WebSocket, so
+ * we own STT, endpointing, the brain and the voice (Sally at fast-path
+ * speed). The caller ID is passed as a Stream parameter.
+ */
+export function mediaStreamTwiml(params: { wssBase: string; from: string }): string {
+  const wss = `${params.wssBase.replace(/^http/, "ws").replace(/\/$/, "")}/twilio/media`;
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Response><Connect><Stream url="${xmlEscape(wss)}">` +
+    `<Parameter name="from" value="${xmlEscape(params.from)}" />` +
+    `</Stream></Connect></Response>`
+  );
+}
+
+/**
  * Hand the call to the ElevenLabs agent over SIP. The number stays fully
  * on Twilio; if the SIP leg fails, the action URL falls back to the
  * ConversationRelay stack so the restaurant line never goes dark.

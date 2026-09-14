@@ -48,7 +48,7 @@ const envSchema = z.object({
   // Which stack answers inbound calls: "elevenlabs" hands the call to the
   // hosted agent over SIP (Twilio number config untouched, instant revert);
   // "relay" is the original ConversationRelay+Claude path.
-  VOICE_STACK: z.enum(["relay", "elevenlabs"]).default("relay"),
+  VOICE_STACK: z.enum(["relay", "elevenlabs", "custom"]).default("relay"),
   ELEVENLABS_API_KEY: z.string().default(""),
   ELEVENLABS_AGENT_ID: z.string().default(""),
   ELEVENLABS_BRIDGE_SECRET: z.string().default(""),

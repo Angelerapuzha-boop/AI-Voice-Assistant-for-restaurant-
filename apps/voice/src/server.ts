@@ -12,9 +12,10 @@ import {
   SquareTerminalProvider,
   getSquareConnection,
 } from "@meatbox/core";
-import { conversationRelayTwiml, elevenLabsSipTwiml, unavailableTwiml } from "./twiml";
+import { conversationRelayTwiml, elevenLabsSipTwiml, mediaStreamTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
+import { MediaStreamSession } from "./media-stream-session";
 import { checkBridgeSecret, ElevenLabsBridge, verifyPostCallSignature } from "./elevenlabs-bridge";
 import { startMaintenanceWorker, startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
@@ -141,6 +142,11 @@ app.post("/twilio/voice", async (req, reply) => {
 
   const callSid = params.CallSid ?? "";
   reply.type("text/xml");
+  // Custom media-stream pipeline: our own audio + Sally at fast-path speed.
+  if (env.VOICE_STACK === "custom") {
+    req.log.info({ callSid }, "routing call to custom media-stream pipeline");
+    return mediaStreamTwiml({ wssBase: env.VOICE_PUBLIC_URL, from: params.From ?? "" });
+  }
   // ElevenLabs stack: hand the call to the hosted agent over SIP. The
   // Dial action falls back to the relay stack if the SIP leg fails.
   if (env.VOICE_STACK === "elevenlabs" && env.TWILIO_PHONE_NUMBER) {
@@ -255,6 +261,15 @@ app.get("/twilio/relay", { websocket: true }, (socket, req) => {
       verifyRelayToken(env.INTERNAL_API_SECRET || "dev-secret", callSid, t),
     token,
     log: (msg, extra) => req.log.warn(extra ?? {}, msg),
+  });
+});
+
+// ------------------------------------------------------------ custom media stream WS
+
+app.get("/twilio/media", { websocket: true }, (socket, req) => {
+  new MediaStreamSession(socket, {
+    createLlm: (model) => createAnthropicLlm(model),
+    log: (msg, extra) => req.log.info(extra ?? {}, msg),
   });
 });
 
