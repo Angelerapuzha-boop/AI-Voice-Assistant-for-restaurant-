@@ -28,6 +28,9 @@ const YES_PHRASES = new Set([
   "confirm it", "yes confirm", "yep confirm", "lock it in", "go for it",
   "do it", "yes do it", "that's the one", "thats the one", "all correct",
   "yeah all good", "yep all good", "yes all good",
+  "good to go", "all good to go", "ready to go", "send it", "send it through",
+  "that works", "sounds right", "looks good",
+  "happy with that", "that's fine", "thats fine", "confirmed",
 ]);
 
 const FINISH_PHRASES = new Set([

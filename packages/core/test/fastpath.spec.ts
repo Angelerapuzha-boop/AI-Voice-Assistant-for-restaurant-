@@ -116,6 +116,14 @@ describe("classifiers", () => {
       expect(isYes(t), t).toBe(false);
     }
   });
+
+  it("accepts casual Aussie confirmations (live call misses)", () => {
+    for (const t of ["Good to go", "good to go mate", "send it through", "that works", "happy with that", "looks good"]) {
+      expect(isYes(t), t).toBe(true);
+    }
+    // Still distinct from 'finished ordering'
+    expect(isFinished("that's it")).toBe(true);
+  });
 });
 
 describe("fast paths (LLM must not be called)", () => {
