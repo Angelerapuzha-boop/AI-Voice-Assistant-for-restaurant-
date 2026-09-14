@@ -268,6 +268,9 @@ async function main(): Promise<void> {
         turn_timeout: 7,
         // Eager: respond the moment the caller stops — "no silence" spec.
         turn_eagerness: "eager",
+        // Start composing the reply WHILE the caller is still finishing —
+        // the answer is ready the instant they stop (kills the per-turn gap).
+        speculative_turn: true,
         // Rare slow generations get one tiny human sound, never a phrase
         // (Kevin: "just a sec" repeats read as lag).
         soft_timeout_config: {
