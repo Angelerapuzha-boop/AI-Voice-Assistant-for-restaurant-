@@ -5,6 +5,12 @@ factor and the reliability ceiling of the single Windows box removed.
 
 Status: PLAN (awaiting Kevin's go + cloud account). Nothing here is built yet.
 
+**Decisions locked (2026-09-15):** Host = **Fly.io**. Voice vendor = **open to a
+multi-region provider** for true global speed (Sally's exact ElevenLabs voice may
+change / be re-cloned). → Build order: Phase 1 Fly.io US region keeping Sally
+(ships in days), then Phase 2 pilot a multi-region voice layer (Cartesia TTS +
+Deepgram STT) for genuinely-local speed worldwide. See §7 for the vendor research.
+
 ---
 
 ## 1. The core insight (measured, 2026-09-15)
@@ -139,22 +145,33 @@ box costs $0 in infra but carries the reliability + latency ceiling.
 
 ---
 
-## 7. "True" multi-region — the honest caveat
+## 7. True multi-region voice layer (Phase 2 — Kevin is open to it)
 
-Running media servers in Sydney + US + Europe does **not** help while STT/TTS is
-US-only: a Sydney media server still pays the US round-trip to ElevenLabs. So:
+Running media servers in multiple regions only helps if the STT/TTS is ALSO
+regional. ElevenLabs (Sally) is US-only, so Phase 1 keeps a single US region.
+For genuinely-local speed worldwide, Phase 2 pilots a multi-region voice layer.
+Research (Sept 2026):
 
-- **Keep Sally (ElevenLabs):** a single US region is optimal; extra regions add
-  cost, not speed.
-- **Go truly global:** switch STT/TTS to a provider with regional PoPs (e.g.
-  Deepgram STT is multi-region; TTS via a regional vendor) — but you'd lose
-  Sally's exact voice or have to re-clone it. Big vendor decision.
-- **Anthropic can be regionalized independently** via AWS Bedrock / GCP Vertex
-  (Sydney available) — useful if we ever run a media server outside the US.
+- **TTS — Cartesia (Sonic-3):** ~50–90ms time-to-first-audio (vs ElevenLabs
+  flash ~300ms), built for realtime phone agents, **APAC presence**, and
+  **voice cloning** — so we can re-create a Sally-like voice regionally. This is
+  the standout: faster AND regional. (Alternatives: PlayHT WebSocket TTS w/
+  30-sec cloning; Rime for conversational cloning.)
+- **STT — Deepgram (Flux):** multi-region, sub-300ms, cost-efficient at scale.
+  (ElevenLabs Scribe v2 realtime is ~150ms first-partial but US-only.)
+- **LLM — Anthropic via Bedrock/Vertex** in a regional zone (Sydney available),
+  so understanding turns also run near a regional media server.
 
-Recommendation: **single US region now** (90% of the benefit); revisit true
-multi-region only with meaningful non-US call volume and a multi-region voice
-vendor.
+The pipeline is provider-agnostic by design (our `elevenlabs-stream.ts` is a thin
+adapter — swapping in Cartesia/Deepgram is an adapter change, not a rewrite), so
+Phase 2 is additive. **Mandatory before committing:** clone Sally on Cartesia,
+run a same-region P50/P90 latency test on our own audio, and let Kevin ear-test
+the cloned voice — vendor latency claims are a shortlist filter, not proof.
+
+Phase 2 outcome if it lands: media servers in `iad` (US) + `syd` (APAC) +
+optionally `lhr` (EU), each with region-local Cartesia/Deepgram/Anthropic → every
+caller hits a nearby stack, geographic tax ~15ms everywhere. This is the actual
+"worldwide, no lag" target.
 
 ---
 
@@ -173,6 +190,20 @@ vendor.
   edge config, the test battery, the cutover, hardening.
 - **You provide:** the cloud account + billing authorization, the spend approval,
   the vendor decisions above. (DNS is already on Cloudflare — no change needed.)
+
+## 10a. Kevin's setup steps (unblocks the build — ~15 min)
+
+I can't create accounts or enter payment. To unblock Phase 1:
+1. Create a Fly.io account at fly.io and add a card (billing).
+2. Install flyctl and sign in, OR create a deploy token and give it to me:
+   `fly tokens create deploy -x 999999h` (paste it to me — I'll treat it as a
+   secret and we rotate it after).
+3. Tell me your ElevenLabs + Anthropic keys are OK to move (we rotate both
+   during migration since they were pasted in chat).
+That's it — I do the rest (Postgres, deploy, Twilio edge, test battery, cutover).
+
+Already prepared in the repo (account-independent): `fly.voice.toml`,
+`fly.web.toml`, production Dockerfiles, boot-time migrations.
 
 ## 10. Honest expectation
 

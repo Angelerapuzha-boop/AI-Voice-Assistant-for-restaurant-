@@ -1,0 +1,31 @@
+# Fly.io config for the web app (admin / kitchen / POS / public menu + /api).
+# Deploy from repo root:  fly deploy -c fly.web.toml
+# DRAFT — verify on first deploy.
+app = "meatbox-web"
+primary_region = "iad"
+
+[build]
+  dockerfile = "apps/web/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  WEB_PORT = "3000"
+  HOSTNAME = "0.0.0.0"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "suspend" # web can idle; wakes on request
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "20s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb" # Next.js runtime headroom

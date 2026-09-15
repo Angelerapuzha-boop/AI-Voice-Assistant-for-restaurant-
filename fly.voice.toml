@@ -1,0 +1,37 @@
+# Fly.io config for the voice media server (WebSocket, always-on).
+# Deploy from repo root:  fly deploy -c fly.voice.toml
+# DRAFT — verify on first deploy. Secrets set via `fly secrets set` (see docs/MULTI_REGION_CLOUD_PLAN.md).
+app = "meatbox-voice"
+primary_region = "iad" # US-east: next to ElevenLabs, Anthropic, Twilio US media edge
+
+[build]
+  dockerfile = "apps/voice/Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  VOICE_PORT = "8080"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # A media server must stay up for the length of every call — never auto-stop.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 150
+    hard_limit = 200
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
