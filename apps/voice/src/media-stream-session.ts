@@ -33,7 +33,7 @@ import { ScribeStream, openSallyStream, type SallyStream } from "./elevenlabs-st
 // --- endpointing / barge-in tuning (telephony 8kHz mu-law) ---
 const FRAME_MS = 20;
 const SPEECH_RMS = 550; // above this = voice present
-const ENDPOINT_SILENCE_MS = 350; // silence after speech = end of utterance (spec #9)
+const ENDPOINT_SILENCE_MS = 240; // silence after speech = end of utterance (was 350; snappier reply)
 const BARGE_SPEECH_MS = 120; // sustained speech during playback = barge-in
 const MIN_UTTERANCE_MS = 200; // ignore blips shorter than this
 
@@ -63,6 +63,7 @@ export class MediaStreamSession {
   private awaitingReply = false; // a turn is being processed
   private bargeMs = 0; // sustained speech while we're speaking
   private endTimer: ReturnType<typeof setTimeout> | null = null;
+  private commitAt = 0; // when we asked Scribe to finalise (for STT-RTT timing)
 
   constructor(
     private readonly ws: WebSocket,
@@ -197,7 +198,14 @@ export class MediaStreamSession {
     if (voice) {
       this.speechMs += FRAME_MS;
       this.silenceMs = 0;
-      if (this.speechMs >= MIN_UTTERANCE_MS) this.inUtterance = true;
+      if (this.speechMs >= MIN_UTTERANCE_MS && !this.inUtterance) {
+        this.inUtterance = true;
+        // Pre-open Sally's socket the INSTANT the caller is clearly speaking,
+        // so the ~150-300ms handshake overlaps their speech — not the reply
+        // gap. (End-of-speech was too late: the fast-path brain finishes in
+        // ~20ms, well before a handshake started only then would complete.)
+        if (!this.warmTts) this.warmTts = openSallyStream(env.ELEVENLABS_VOICE_ID);
+      }
     } else if (this.inUtterance) {
       this.silenceMs += FRAME_MS;
       if (this.silenceMs >= ENDPOINT_SILENCE_MS && !this.awaitingReply) {
@@ -205,10 +213,8 @@ export class MediaStreamSession {
         this.speechMs = 0;
         this.silenceMs = 0;
         this.awaitingReply = true;
-        // Pre-open Sally's socket NOW so the handshake overlaps the brain's
-        // thinking, not the caller's wait.
-        this.warmTts = openSallyStream(env.ELEVENLABS_VOICE_ID);
-        this.scribe?.commit(); // -> onCommitted -> onCallerUtterance
+        this.commitAt = Date.now();
+        this.scribe?.commit(); // -> committed_transcript -> onCommitted -> onCallerUtterance
       }
     }
   }
@@ -216,14 +222,16 @@ export class MediaStreamSession {
   private onCallerUtterance(text: string): void {
     this.awaitingReply = false;
     if (!text.trim() || this.closed) return;
-    this.enqueueTurn(text.trim());
+    // STT round-trip: caller's silence -> our commit -> Scribe's final text.
+    const sttMs = this.commitAt ? Date.now() - this.commitAt : 0;
+    this.enqueueTurn(text.trim(), sttMs);
   }
 
-  private enqueueTurn(text: string): void {
-    this.turnQueue = this.turnQueue.then(() => this.runTurn(text)).catch(() => undefined);
+  private enqueueTurn(text: string, sttMs: number): void {
+    this.turnQueue = this.turnQueue.then(() => this.runTurn(text, sttMs)).catch(() => undefined);
   }
 
-  private async runTurn(text: string): Promise<void> {
+  private async runTurn(text: string, sttMs: number): Promise<void> {
     if (!this.agent || this.closed) return;
     const db = getDb();
     if (this.callId) {
@@ -244,13 +252,6 @@ export class MediaStreamSession {
     const turnMs = Date.now() - turnStarted;
 
     if (this.callId) {
-      await recordCallEvent(db, this.callId, turnMs > 8000 ? "slow_turn" : "turn_metrics", {
-        turnMs,
-        toolCalls: result.toolCalls.length,
-        interrupted: result.interrupted,
-        fastPath: result.fastPath ?? null,
-        assistantWords: speakText ? speakText.split(/\s+/).length : 0,
-      });
       if (speakText) {
         await appendTranscript(db, this.callId, {
           role: "assistant",
@@ -264,7 +265,22 @@ export class MediaStreamSession {
       if (result.error) await recordCallEvent(db, this.callId, "agent_error", { error: result.error });
     }
 
-    if (!result.interrupted && speakText) await this.speak(speakText);
+    // Speak, capturing Sally's time-to-first-audio, then record the FULL felt
+    // gap (STT + brain + first audio) — not just brain time.
+    const ttfbMs = !result.interrupted && speakText ? await this.speak(speakText) : null;
+    if (this.callId) {
+      const feltGapMs = sttMs + turnMs + (ttfbMs ?? 0);
+      await recordCallEvent(db, this.callId, feltGapMs > 8000 ? "slow_turn" : "turn_metrics", {
+        turnMs,
+        sttMs,
+        ttfbMs,
+        feltGapMs,
+        toolCalls: result.toolCalls.length,
+        interrupted: result.interrupted,
+        fastPath: result.fastPath ?? null,
+        assistantWords: speakText ? speakText.split(/\s+/).length : 0,
+      });
+    }
 
     if (result.error) this.consecutiveMisses++;
     else if (!result.interrupted) this.consecutiveMisses = 0;
@@ -285,17 +301,28 @@ export class MediaStreamSession {
     }
   }
 
-  /** Speak text in Sally's voice; resolves when playback audio is fully sent. */
-  private async speak(text: string): Promise<void> {
+  /**
+   * Speak text in Sally's voice; resolves when playback audio is fully sent.
+   * Returns time-to-first-audio-chunk in ms (null if no audio was produced).
+   */
+  private async speak(text: string): Promise<number | null> {
     this.stopSpeaking();
     this.bargeMs = 0;
-    // Use the socket pre-opened at end-of-speech if we have one (its
-    // handshake already overlapped the brain); else open fresh (greeting).
+    // Use the socket pre-opened when the caller started speaking (its
+    // handshake already overlapped their speech); else open fresh (greeting,
+    // or if the pre-opened one died before we got to use it).
+    if (this.warmTts?.isDead()) this.warmTts = null;
     const stream = this.warmTts ?? openSallyStream(env.ELEVENLABS_VOICE_ID);
     this.warmTts = null;
     this.speaking = stream;
-    await stream.speak(text, (chunk) => this.sendMedia(chunk));
+    const start = Date.now();
+    let ttfb: number | null = null;
+    await stream.speak(text, (chunk) => {
+      if (ttfb === null) ttfb = Date.now() - start;
+      this.sendMedia(chunk);
+    });
     if (this.speaking === stream) this.speaking = null;
+    return ttfb;
   }
 
   private stopSpeaking(): void {

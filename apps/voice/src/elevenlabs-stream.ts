@@ -123,15 +123,20 @@ export class ScribeStream {
 export interface SallyStream {
   speak: (text: string, onAudio: (muLawChunk: Buffer) => void) => Promise<void>;
   abort: () => void;
+  /** True if the socket died (error/close) before it was used — caller should open a fresh one. */
+  isDead: () => boolean;
 }
 
 export function openSallyStream(voiceId: string): SallyStream {
   const url =
     `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input` +
-    `?model_id=eleven_flash_v2&output_format=ulaw_8000&optimize_streaming_latency=4`;
+    `?model_id=eleven_flash_v2&output_format=ulaw_8000&optimize_streaming_latency=4` +
+    `&inactivity_timeout=180`; // opened at caller-speech-start; must survive a long utterance
   const ws = new WebSocket(url, { headers: { "xi-api-key": XI_KEY() } });
   let aborted = false;
   let opened = false;
+  let used = false; // speak() has been called
+  let dead = false; // socket died before use
   let pendingText: string | null = null;
   let audioCb: ((c: Buffer) => void) | null = null;
   let resolveDone: (() => void) | null = null;
@@ -173,12 +178,19 @@ export function openSallyStream(voiceId: string): SallyStream {
       resolveDone?.();
     }
   });
-  ws.on("error", () => resolveDone?.());
-  ws.on("close", () => resolveDone?.());
+  ws.on("error", () => {
+    if (!used) dead = true;
+    resolveDone?.();
+  });
+  ws.on("close", () => {
+    if (!used) dead = true;
+    resolveDone?.();
+  });
 
   return {
     speak: (text, onAudio) =>
       new Promise<void>((resolve) => {
+        used = true;
         audioCb = onAudio;
         resolveDone = resolve;
         if (opened) flush(text);
@@ -193,5 +205,6 @@ export function openSallyStream(voiceId: string): SallyStream {
       }
       resolveDone?.();
     },
+    isDead: () => dead,
   };
 }
