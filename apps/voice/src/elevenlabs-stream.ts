@@ -41,8 +41,12 @@ export class ScribeStream {
   }
 
   private connect(): void {
+    // Force English: on a degraded/accented line Scribe's auto language
+    // detection was mis-hearing English as Arabic/Portuguese and returning
+    // garbage (Kevin's India->AU call, 2026-09-15), which missed the fast path
+    // and stalled on the LLM. This restaurant is English-only.
     const url =
-      "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime";
+      "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&language_code=en";
     const ws = new WebSocket(url, { headers: { "xi-api-key": XI_KEY() } });
     this.ws = ws;
     ws.on("open", () => {
