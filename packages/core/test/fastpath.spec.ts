@@ -148,6 +148,23 @@ describe("fast paths (LLM must not be called)", () => {
     expect(agent.state.pendingItem?.quantity).toBe(2);
   });
 
+  it('answers a bare greeting instantly ("hey") without the LLM', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    agent.state.lastAssistantText = "Hi, Welcome to Meat Box, what can I get you?";
+    const res = await agent.handleTurn("hey there");
+    expect(res.fastPath).toBe("greeting_ack");
+    expect(res.text).toMatch(/get for you/i);
+    expect(agent.state.draftOrderId).toBeFalsy(); // no order created by a greeting
+  });
+
+  it('a greeting with an order is NOT treated as a bare greeting', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    const res = await agent.handleTurn("hey can I grab two chicken meatboxes");
+    // Falls through to the item path, not greeting_ack.
+    expect(res.fastPath).not.toBe("greeting_ack");
+    expect(agent.state.draftOrderId).toBeTruthy();
+  });
+
   it("adds a no-required-option item deterministically and asks anything else", async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     const res = await agent.handleTurn("a coke"); // if Coke needs no required option

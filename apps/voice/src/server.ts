@@ -365,7 +365,12 @@ async function warmTtsCacheAtBoot(): Promise<void> {
   const db = getDb();
   const restaurant = await getDefaultRestaurant(db);
   const settings = await getSettings(db, restaurant.id);
-  const phrases = new Set<string>(["Anything else?", "What name shall I put it under?", "Yep."]);
+  const phrases = new Set<string>([
+    "Anything else?",
+    "What name shall I put it under?",
+    "What can I get for you?",
+    "Yep.",
+  ]);
   if (settings.aiGreeting) phrases.add(settings.aiGreeting);
   const items = await listItems(db, restaurant.id);
   for (const item of items) {

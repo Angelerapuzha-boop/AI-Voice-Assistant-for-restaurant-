@@ -192,10 +192,11 @@ describe("agent engine + tools", () => {
       },
     };
     const agent = new OrderAgent(failing, agentCtx());
-    const turn1 = await agent.handleTurn("hello");
+    // A question (not a bare greeting or fast-path turn) so it reaches the LLM.
+    const turn1 = await agent.handleTurn("what have you got?");
     expect(turn1.text).toMatch(/say it again/i);
     expect(turn1.endCall).toBe(false);
-    const turn2 = await agent.handleTurn("hello?");
+    const turn2 = await agent.handleTurn("still there?");
     expect(turn2.endCall).toBe(true);
     expect(turn2.text).toMatch(/call us back/i);
   });
@@ -239,7 +240,7 @@ describe("agent engine + tools", () => {
   it("system prompt carries the no-bookings and allergy rules (scenarios 5 & 12)", async () => {
     const llm = new FakeLlm([textTurn("ok")]);
     const agent = new OrderAgent(llm, agentCtx());
-    await agent.handleTurn("hi");
+    await agent.handleTurn("do you take bookings?"); // reaches the LLM (not a greeting/fast-path)
     const params = llm.seenParams[0] as { system: string };
     expect(params.system).toMatch(/don't take table bookings/i);
     expect(params.system).toMatch(/never guarantee an item is allergen-free/i);

@@ -77,6 +77,23 @@ function atGreetingStage(state: AgentState): boolean {
   return !state.draftOrderId;
 }
 
+// Instant reply to a bare greeting at the start. Not "what can I get you?"
+// (the opening line already said that) — a fresh, human hand-off to ordering.
+const GREETING_ACK = "What can I get for you?";
+
+const GREETING_WORDS = new Set([
+  "hi", "hey", "hello", "heya", "hiya", "gday", "yo", "howdy", "there", "mate",
+  "hows", "it", "going", "morning", "afternoon", "evening",
+]);
+
+/** The whole utterance is just a greeting — no order content. */
+function isGreetingOnly(text: string): boolean {
+  const toks = normalise(text)
+    .split(" ")
+    .filter((w) => w && !FILLER_WORDS.has(w));
+  return toks.length > 0 && toks.length <= 4 && toks.every((t) => GREETING_WORDS.has(t));
+}
+
 // ---------------------------------------------------------------- item match
 
 const QTY_WORDS: Record<string, number> = {
@@ -383,6 +400,14 @@ export async function tryFastPath(
   // "Hang on" — acknowledge and wait, never prompt.
   if (WAIT_REGEX.test(normalise(text)) && !atConfirmStage(state)) {
     return { handled: true, say: "Yep.", toolCalls: calls, kind: "wait" };
+  }
+
+  // A bare greeting back at the start ("hey", "hi there") — answer instantly
+  // like a person would, instead of a ~2s LLM pleasantry. Committed-transcript
+  // only (never a probe): a partial "hey" could be the front of "hey, can I
+  // grab two meatboxes" and we must not answer the greeting and drop the order.
+  if (!opts.probe && atGreetingStage(state) && !state.draftOrderId && isGreetingOnly(text)) {
+    return { handled: true, say: GREETING_ACK, toolCalls: calls, kind: "greeting_ack" };
   }
 
   // A pending (incomplete) item means the order isn't settled — finishing
