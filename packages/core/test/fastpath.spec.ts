@@ -138,6 +138,17 @@ describe("fast paths (LLM must not be called)", () => {
     expect(agent.state.pendingItem?.quantity).toBe(2);
   });
 
+  it('orders fast from a natural phrase: "I want to order a chicken kebab"', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    agent.state.lastAssistantText = "Hi, Welcome to Meat Box, what can I get you?";
+    const res = await agent.handleTurn("Hi, I want to order a chicken kebab");
+    // Kebab has no required options -> adds cleanly, straight to "anything else".
+    expect(["item_added", "item_pending"]).toContain(res.fastPath);
+    expect(agent.state.draftOrderId).toBeTruthy();
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.items.some((i) => i.nameSnapshot === "Chicken Kebab")).toBe(true);
+  });
+
   it("orders the first item fast even when the LLM worded the greeting differently", async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     // A varied opener must not disable the deterministic item path.

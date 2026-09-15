@@ -125,11 +125,14 @@ function matchMenuItem(
   items: { name: string; aliases: string[] }[],
 ): ItemMatch | null {
   // Strip fillers, ordering verbs and greeting words so only the item
-  // (and a quantity) remain.
+  // (and a quantity) remain — real callers say "I want to order a chicken
+  // kebab", "I'll have...", "let me get...", not just the bare item.
   const STRIP = new Set([
     "grab", "get", "can", "i", "want", "would", "like", "have", "id",
     "hey", "hi", "hello", "ok", "okay", "so", "look", "see", "gimme", "give",
     "us", "could", "lemme", "let",
+    "to", "order", "ordering", "wanna", "gonna", "ill", "yeah", "yep",
+    "actually", "start", "reckon", "do", "doing", "after", "im", "we",
   ]);
   const tokens = normalise(utterance)
     .split(" ")
