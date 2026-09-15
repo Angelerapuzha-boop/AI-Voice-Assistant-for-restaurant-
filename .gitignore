@@ -8,3 +8,5 @@ dist/
 .turbo/
 coverage/
 .DS_Store
+
+.tts-cache/

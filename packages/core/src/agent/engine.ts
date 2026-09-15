@@ -86,19 +86,21 @@ export class OrderAgent {
     }
   }
 
-  async handleTurn(
+  /**
+   * Run ONLY the deterministic fast path — no LLM. Returns the turn result if
+   * a predictable turn was handled (option answer, item add, name, "yep"),
+   * else null. Used to respond off a live STT partial the instant the caller
+   * stops: a clean match answers immediately; a miss returns null so the
+   * caller waits for the accurate transcript instead of guessing.
+   */
+  async tryFastPathOnly(
     userText: string,
     handlers: TurnHandlers = {},
-    signal?: AbortSignal,
-  ): Promise<AgentTurnResult> {
-    const system = this.system;
+    opts: { probe?: boolean } = {},
+  ): Promise<AgentTurnResult | null> {
     this.state.currentCallerText = userText;
-
-    // Deterministic dialogue control first: predictable turns (option
-    // answers, "nah that's it", the final "yep") answer in milliseconds
-    // and never touch the LLM. Anything ambiguous falls through.
     try {
-      const fast = await tryFastPath(this.ctx, this.state, userText);
+      const fast = await tryFastPath(this.ctx, this.state, userText, opts);
       if (fast.handled) {
         this.messages.push({ role: "user", content: userText });
         if (fast.say) {
@@ -122,6 +124,21 @@ export class OrderAgent {
       // A fast-path failure must never take the call down — fall through.
       console.error("[fastpath] failed, falling back to LLM:", err);
     }
+    return null;
+  }
+
+  async handleTurn(
+    userText: string,
+    handlers: TurnHandlers = {},
+    signal?: AbortSignal,
+  ): Promise<AgentTurnResult> {
+    const system = this.system;
+
+    // Deterministic dialogue control first: predictable turns answer in
+    // milliseconds and never touch the LLM. Anything ambiguous falls through.
+    const fast = await this.tryFastPathOnly(userText, handlers);
+    if (fast) return fast;
+    // tryFastPathOnly set currentCallerText (needed by the confirm guard).
 
     // Everything this turn appends is rolled back to here on failure, so
     // an abort or API error mid-tool-loop can never leave a dangling

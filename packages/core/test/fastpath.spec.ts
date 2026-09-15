@@ -301,6 +301,44 @@ describe("fast paths (LLM must not be called)", () => {
   });
 });
 
+describe("tryFastPathOnly (partial probe)", () => {
+  it("returns a result for a clean deterministic turn (no LLM)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [
+      { name: "Chicken Meatbox", qty: 1, mods: [["Chicken Meatbox", "Chips & Salad"]] },
+    ]);
+    agent.state.lastAssistantText = "Anything else?";
+    const res = await agent.tryFastPathOnly("garlic on both");
+    expect(res).not.toBeNull();
+    expect(res!.fastPath).toBe("optional_fill");
+    expect(res!.text).toBe("Anything else?");
+  });
+
+  it("returns null when the turn needs the LLM (no side effects, no speech)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [{ name: "Water", qty: 1 }]);
+    agent.state.lastAssistantText = "Anything else?";
+    // A truncated/ambiguous partial must NOT be guessed — probe returns null
+    // so the caller waits for the accurate committed transcript.
+    const res = await agent.tryFastPathOnly("what's in the meat");
+    expect(res).toBeNull();
+  });
+
+  it("in probe mode, a new item add is refused (could be a prefix of a bigger order)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    // Greeting stage, would normally add via matchMenuItem — but a PARTIAL
+    // could be "two chicken meatboxes" cut from "...and a coke", so a probe
+    // must not add; it waits for the committed transcript.
+    const probe = await agent.tryFastPathOnly("two chicken meatboxes", {}, { probe: true });
+    expect(probe).toBeNull();
+    expect(agent.state.draftOrderId).toBeFalsy(); // nothing was created
+    // The SAME text on the committed path (no probe flag) DOES add it.
+    const full = await agent.tryFastPathOnly("two chicken meatboxes");
+    expect(full).not.toBeNull();
+    expect(full!.fastPath).toBe("item_pending");
+  });
+});
+
 describe("pending-item safety", () => {
   it("an unrelated successful add must NOT clear the pending item", async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());

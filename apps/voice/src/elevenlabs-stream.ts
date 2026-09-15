@@ -29,9 +29,15 @@ export class ScribeStream {
   private ready = false;
   private queue: string[] = []; // base64 PCM16 frames buffered pre-open
   private closed = false;
+  private lastPartial = ""; // most recent live partial for the current segment
 
   constructor(private readonly handlers: ScribeHandlers) {
     this.connect();
+  }
+
+  /** The latest live partial transcript (no round-trip). "" if none yet. */
+  peekPartial(): string {
+    return this.lastPartial.trim();
   }
 
   private connect(): void {
@@ -50,13 +56,15 @@ export class ScribeStream {
       } catch {
         return;
       }
-      if (msg.message_type === "partial_transcript" && msg.text) {
+      if (msg.message_type === "partial_transcript" && typeof msg.text === "string") {
+        this.lastPartial = msg.text;
         this.handlers.onPartial?.(msg.text);
       } else if (
         (msg.message_type === "committed_transcript" ||
           msg.message_type === "committed_transcript_with_timestamps") &&
         typeof msg.text === "string"
       ) {
+        this.lastPartial = "";
         if (msg.text.trim()) this.handlers.onCommitted(msg.text.trim());
       } else if (msg.message_type === "input_error") {
         this.handlers.onError?.(JSON.stringify(msg));

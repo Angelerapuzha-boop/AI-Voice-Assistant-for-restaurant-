@@ -351,10 +351,23 @@ function matchOptions(
 
 // ---------------------------------------------------------------- main entry
 
+export interface FastPathOptions {
+  /**
+   * Probing a live STT PARTIAL (not the final transcript). The partial can be
+   * a complete-looking PREFIX of a longer utterance, so skip new-item adds:
+   * matching "two chicken meatboxes" off a partial could drop a trailing
+   * "...and a coke". Item adds wait for the accurate committed transcript.
+   * Answer turns (options, name, confirm, finish) stay eligible — they answer
+   * a specific question and are inherently complete.
+   */
+  probe?: boolean;
+}
+
 export async function tryFastPath(
   ctx: AgentContext,
   state: AgentState,
   utterance: string,
+  opts: FastPathOptions = {},
 ): Promise<FastPathResult> {
   const text = utterance.trim();
   if (!text || text.length > 80) return NOT_HANDLED; // long speech -> LLM
@@ -422,7 +435,8 @@ export async function tryFastPath(
 
   // ---- deterministic item ordering: a clear menu item at the greeting or
   // after "anything else?" is added without the LLM ("two chicken meatboxes").
-  if (!hasPending && (atGreetingStage(state) || atAnythingElseStage(state))) {
+  // Skipped when probing a partial (could be a prefix of a bigger order).
+  if (!opts.probe && !hasPending && (atGreetingStage(state) || atAnythingElseStage(state))) {
     const items = await listItems(ctx.db, ctx.restaurant.id);
     const match = matchMenuItem(
       text,

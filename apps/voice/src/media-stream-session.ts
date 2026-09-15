@@ -18,6 +18,15 @@ import {
 } from "@meatbox/core";
 import { muLawFrameRms } from "./audio";
 import { ScribeStream, openSallyStream, type SallyStream } from "./elevenlabs-stream";
+import { getCachedUlaw, maybeCacheSpoken } from "./tts-cache";
+
+// Stands in for `this.speaking` while cached audio plays out, so barge-in
+// (which checks `this.speaking`) still interrupts it.
+const CACHED_PLAYBACK: SallyStream = {
+  speak: async () => undefined,
+  abort: () => undefined,
+  isDead: () => false,
+};
 
 /**
  * One Twilio Media Streams WebSocket = one phone call, fully custom:
@@ -33,7 +42,9 @@ import { ScribeStream, openSallyStream, type SallyStream } from "./elevenlabs-st
 // --- endpointing / barge-in tuning (telephony 8kHz mu-law) ---
 const FRAME_MS = 20;
 const SPEECH_RMS = 550; // above this = voice present
-const ENDPOINT_SILENCE_MS = 240; // silence after speech = end of utterance (was 350; snappier reply)
+const ENDPOINT_SILENCE_MS = 300; // silence after speech = end of utterance. Low enough to feel
+// snappy (the cache + partial probe carry the speed); high enough not to split a natural
+// mid-phrase pause into two turns (240 was clipping "chips and [pause] salad").
 const BARGE_SPEECH_MS = 120; // sustained speech during playback = barge-in
 const MIN_UTTERANCE_MS = 200; // ignore blips shorter than this
 
@@ -64,6 +75,7 @@ export class MediaStreamSession {
   private bargeMs = 0; // sustained speech while we're speaking
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private commitAt = 0; // when we asked Scribe to finalise (for STT-RTT timing)
+  private segmentHandled = false; // this utterance was answered off its partial (skip committed)
 
   constructor(
     private readonly ws: WebSocket,
@@ -213,45 +225,65 @@ export class MediaStreamSession {
         this.speechMs = 0;
         this.silenceMs = 0;
         this.awaitingReply = true;
+        this.segmentHandled = false;
         this.commitAt = Date.now();
+        // Probe the live partial against the fast path RIGHT NOW (no round-trip).
+        // A clean match answers instantly; a miss does nothing and the accurate
+        // committed transcript (below) drives the turn ~400ms later.
+        const partial = this.scribe?.peekPartial() ?? "";
         this.scribe?.commit(); // -> committed_transcript -> onCommitted -> onCallerUtterance
+        if (partial) this.enqueueTurn(partial, 0, "probe");
       }
     }
   }
 
   private onCallerUtterance(text: string): void {
+    // The committed (accurate) transcript arrived. If we already answered this
+    // utterance off its partial (probe), ignore it — don't answer twice.
+    if (this.segmentHandled) {
+      this.segmentHandled = false;
+      return;
+    }
     this.awaitingReply = false;
     if (!text.trim() || this.closed) return;
     // STT round-trip: caller's silence -> our commit -> Scribe's final text.
     const sttMs = this.commitAt ? Date.now() - this.commitAt : 0;
-    this.enqueueTurn(text.trim(), sttMs);
+    this.enqueueTurn(text.trim(), sttMs, "full");
   }
 
-  private enqueueTurn(text: string, sttMs: number): void {
-    this.turnQueue = this.turnQueue.then(() => this.runTurn(text, sttMs)).catch(() => undefined);
+  private enqueueTurn(text: string, sttMs: number, mode: "probe" | "full"): void {
+    this.turnQueue = this.turnQueue.then(() => this.runTurn(text, sttMs, mode)).catch(() => undefined);
   }
 
-  private async runTurn(text: string, sttMs: number): Promise<void> {
+  private async runTurn(text: string, sttMs: number, mode: "probe" | "full"): Promise<void> {
     if (!this.agent || this.closed) return;
     const db = getDb();
-    if (this.callId) {
-      await appendTranscript(db, this.callId, { role: "caller", text, at: new Date().toISOString() });
-    }
     this.abort = new AbortController();
     const turnStarted = Date.now();
 
-    // Collect the whole reply, then speak it (fast-path returns instantly;
-    // the LLM path streams — we buffer to one Sally utterance for clean audio).
-    let reply = "";
-    const result = await this.agent.handleTurn(
-      text,
-      { onText: (tok) => (reply += tok) },
-      this.abort.signal,
-    );
-    const speakText = (result.text || reply).trim();
+    let result: Awaited<ReturnType<OrderAgent["handleTurn"]>> | null;
+    if (mode === "probe") {
+      // Fast path only, off the live partial. A miss means "not a clean
+      // deterministic turn" — do nothing and let the committed transcript
+      // drive a full turn (leave awaitingReply set so no new endpoint fires).
+      result = await this.agent.tryFastPathOnly(text, {}, { probe: true });
+      if (!result) return;
+      this.segmentHandled = true; // committed transcript for this segment will be ignored
+    } else {
+      // Committed transcript: fast path OR the LLM understands it.
+      let reply = "";
+      result = await this.agent.handleTurn(
+        text,
+        { onText: (tok) => (reply += tok) },
+        this.abort.signal,
+      );
+      if (!result.text && reply.trim()) result = { ...result, text: reply.trim() };
+    }
+    const speakText = (result.text || "").trim();
     const turnMs = Date.now() - turnStarted;
 
     if (this.callId) {
+      await appendTranscript(db, this.callId, { role: "caller", text, at: new Date().toISOString() });
       if (speakText) {
         await appendTranscript(db, this.callId, {
           role: "assistant",
@@ -299,6 +331,11 @@ export class MediaStreamSession {
         })().catch(() => undefined);
       }, delay);
     }
+
+    // Reply delivered — allow the next utterance to endpoint. (A probe that
+    // DIDN'T handle returned early above without reaching here, keeping
+    // awaitingReply set so the committed transcript drives the turn instead.)
+    this.awaitingReply = false;
   }
 
   /**
@@ -308,20 +345,39 @@ export class MediaStreamSession {
   private async speak(text: string): Promise<number | null> {
     this.stopSpeaking();
     this.bargeMs = 0;
-    // Use the socket pre-opened when the caller started speaking (its
-    // handshake already overlapped their speech); else open fresh (greeting,
-    // or if the pre-opened one died before we got to use it).
+
+    // Cache hit: an invariant fast-path phrase already synthesised in Sally's
+    // voice -> replay instantly, no ElevenLabs round-trip (0ms to first audio).
+    const cached = getCachedUlaw(env.ELEVENLABS_VOICE_ID, text);
+    if (cached && cached.length > 0) {
+      this.speaking = CACHED_PLAYBACK; // so barge-in can interrupt the playout
+      for (let i = 0; i < cached.length; i += 1600) this.sendMedia(cached.subarray(i, i + 1600));
+      // mu-law 8kHz = 8000 bytes/sec; hold "speaking" for the playout so a
+      // barge-in during it is caught (and flushed via sendClear).
+      const playoutMs = Math.ceil(cached.length / 8);
+      await new Promise((r) => setTimeout(r, playoutMs));
+      if (this.speaking === CACHED_PLAYBACK) this.speaking = null;
+      return 0;
+    }
+
+    // Live synthesis. Use the socket pre-opened when the caller started
+    // speaking (its handshake already overlapped their speech); else open
+    // fresh (greeting, or if the pre-opened one died before we used it).
     if (this.warmTts?.isDead()) this.warmTts = null;
     const stream = this.warmTts ?? openSallyStream(env.ELEVENLABS_VOICE_ID);
     this.warmTts = null;
     this.speaking = stream;
     const start = Date.now();
     let ttfb: number | null = null;
+    const chunks: Buffer[] = [];
     await stream.speak(text, (chunk) => {
       if (ttfb === null) ttfb = Date.now() - start;
+      chunks.push(chunk);
       this.sendMedia(chunk);
     });
     if (this.speaking === stream) this.speaking = null;
+    // Cache invariant phrases so the next identical one is instant.
+    if (chunks.length > 0) maybeCacheSpoken(env.ELEVENLABS_VOICE_ID, text, Buffer.concat(chunks));
     return ttfb;
   }
 

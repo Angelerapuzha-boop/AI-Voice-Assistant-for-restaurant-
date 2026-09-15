@@ -5,13 +5,16 @@ import {
   env,
   getDb,
   getDefaultRestaurant,
+  getModifierGroups,
   getSettings,
+  groupQuestion,
   listItems,
   runMigrations,
   settlePayment,
   SquareTerminalProvider,
   getSquareConnection,
 } from "@meatbox/core";
+import { warmPhrases } from "./tts-cache";
 import { conversationRelayTwiml, elevenLabsSipTwiml, mediaStreamTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
@@ -352,6 +355,29 @@ await app.register(async (scope) => {
 await runMigrations(getDb());
 const smsWorker = startSmsWorker((msg) => app.log.info(msg));
 const maintenanceWorker = startMaintenanceWorker((msg) => app.log.info(msg));
+
+// Pre-synthesise Sally's invariant fast-path phrases (greeting, "Anything
+// else?", the name question, every required-option question) so they replay
+// instantly from cache on the very first call. Custom stack only; disk-cached,
+// so this is a no-op after the first warm. Fire-and-forget — never blocks boot.
+async function warmTtsCacheAtBoot(): Promise<void> {
+  if (env.VOICE_STACK !== "custom" || !env.ELEVENLABS_API_KEY) return;
+  const db = getDb();
+  const restaurant = await getDefaultRestaurant(db);
+  const settings = await getSettings(db, restaurant.id);
+  const phrases = new Set<string>(["Anything else?", "What name shall I put it under?", "Yep."]);
+  if (settings.aiGreeting) phrases.add(settings.aiGreeting);
+  const items = await listItems(db, restaurant.id);
+  for (const item of items) {
+    const groups = await getModifierGroups(db, item.id);
+    for (const g of groups) {
+      const opts = g.modifiers.filter((m) => m.isAvailable).map((m) => m.name);
+      phrases.add(groupQuestion(g.name, opts));
+    }
+  }
+  await warmPhrases(env.ELEVENLABS_VOICE_ID, [...phrases], (m) => app.log.info(m));
+}
+void warmTtsCacheAtBoot().catch((err) => app.log.warn({ err }, "tts cache warm failed"));
 
 const shutdown = async () => {
   smsWorker.stop();
