@@ -42,12 +42,12 @@ const CACHED_PLAYBACK: SallyStream = {
 // --- endpointing / barge-in tuning (telephony 8kHz mu-law) ---
 const FRAME_MS = 20;
 const SPEECH_RMS = 550; // above this = voice present
-const ENDPOINT_SILENCE_MS = 250; // silence after speech = end of utterance. 250 = the fastest
-// value that still (mostly) avoids splitting a natural mid-phrase pause. 0 is impossible —
-// too low fires mid-sentence and talks over the caller. Below ~240 clipped "chips and [pause]
-// salad" into two turns on test audio; real speech pauses less, so 250 is the practical floor.
-// The cache + partial probe carry the real speed; this knob is only ~50ms. Smart end-of-speech
-// (Deepgram Flux, Phase 2) is the proper fix for fast-AND-never-cutting-off.
+const ENDPOINT_SILENCE_MS = 300; // silence after speech = end of utterance (the "endpointing"
+// value): after this much silence, treat the caller as done and send the text immediately.
+// 300ms balances snappy replies against not clipping a natural mid-phrase pause ("chips and
+// [pause] salad"); below ~240 split those into two turns. 0 is impossible — it would fire
+// mid-sentence and talk over the caller. The cache + partial probe carry the real speed; this
+// knob is only tens of ms. (STT here is ElevenLabs Scribe + our own VAD, not Deepgram.)
 const BARGE_SPEECH_MS = 120; // sustained speech during playback = barge-in
 const MIN_UTTERANCE_MS = 200; // ignore blips shorter than this
 
