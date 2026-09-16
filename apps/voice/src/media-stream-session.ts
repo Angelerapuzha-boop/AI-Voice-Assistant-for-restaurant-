@@ -270,6 +270,7 @@ export class MediaStreamSession {
     const turnStarted = Date.now();
 
     let result: Awaited<ReturnType<OrderAgent["handleTurn"]>> | null;
+    let fillerFired = false;
     if (mode === "probe") {
       // Fast path only, off the live partial. A miss means "not a clean
       // deterministic turn" — do nothing and let the committed transcript
@@ -286,6 +287,7 @@ export class MediaStreamSession {
       if (fast) {
         result = fast;
       } else {
+        fillerFired = true;
         const fillerPlaying = this.speak(AI_FILLER); // concurrent — covers the think
         let reply = "";
         result = await this.agent.handleTurn(
@@ -302,6 +304,13 @@ export class MediaStreamSession {
 
     if (this.callId) {
       await appendTranscript(db, this.callId, { role: "caller", text, at: new Date().toISOString() });
+      if (fillerFired) {
+        await appendTranscript(db, this.callId, {
+          role: "assistant",
+          text: AI_FILLER,
+          at: new Date().toISOString(),
+        });
+      }
       if (speakText) {
         await appendTranscript(db, this.callId, {
           role: "assistant",
