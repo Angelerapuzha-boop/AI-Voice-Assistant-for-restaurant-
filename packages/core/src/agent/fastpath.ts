@@ -55,7 +55,7 @@ function atConfirmStage(state: AgentState): boolean {
 }
 
 function atAnythingElseStage(state: AgentState): boolean {
-  // "Anything else, mate?", "Anything else for you?", "Was there anything else?" —
+  // "Anything else?", "Anything else for you?", "Was there anything else?" —
   // the LLM varies the wording, so match the phrase anywhere in the line.
   return /anything else/.test(lastLine(state));
 }
@@ -78,8 +78,8 @@ function atGreetingStage(state: AgentState): boolean {
 }
 
 // Instant reply to a bare greeting at the start. Not "what can I get you?"
-// (the opening line already said that) — a fresh, slangy hand-off to ordering.
-const GREETING_ACK = "What can I get ya, mate?";
+// (the opening line already said that) — a fresh, human hand-off to ordering.
+const GREETING_ACK = "What can I get for you?";
 
 const GREETING_WORDS = new Set([
   "hi", "hey", "hello", "heya", "hiya", "gday", "yo", "howdy", "there", "mate",
@@ -230,7 +230,7 @@ export function terseReadback(order: OrderWithItems): string {
 export function spokenClose(order: OrderWithItems): string {
   const type = order.orderType === "dine_in" ? "dine-in" : "takeaway";
   const name = order.customerName.trim();
-  return `Righto, that's ${speakCents(order.totalCents)}, ${type}${name ? ` for ${name}` : ""}. Confirm?`;
+  return `That's ${speakCents(order.totalCents)}, ${type}${name ? ` for ${name}` : ""}. Confirm?`;
 }
 
 // ---------------------------------------------------------------- name capture
@@ -402,7 +402,7 @@ export async function tryFastPath(
 
   // "Hang on" — acknowledge and wait, never prompt.
   if (WAIT_REGEX.test(normalise(text)) && !atConfirmStage(state)) {
-    return { handled: true, say: "No worries.", toolCalls: calls, kind: "wait" };
+    return { handled: true, say: "Yep.", toolCalls: calls, kind: "wait" };
   }
 
   // A bare greeting back at the start ("hey", "hi there") — answer instantly
@@ -425,7 +425,7 @@ export async function tryFastPath(
     const eta = typeof result.readyEstimate === "string"
       ? result.readyEstimate.split(" (")[0]
       : null;
-    const say = `Too easy! ${eta ? `${eta[0]!.toUpperCase()}${eta.slice(1)}. ` : ""}${canText ? "I'll flick ya a text." : ""}`.trim();
+    const say = `Done. ${eta ? `${eta[0]!.toUpperCase()}${eta.slice(1)}. ` : ""}${canText ? "I'll text it through." : ""}`.trim();
     await run("end_call", { reason: "done" });
     return { handled: true, say, endCall: true, toolCalls: calls, kind: "confirm_yes" };
   }
@@ -439,7 +439,7 @@ export async function tryFastPath(
     if (!order.customerName.trim()) {
       return {
         handled: true,
-        say: "Righto, what name's it under, mate?",
+        say: "What name shall I put it under?",
         toolCalls: calls,
         kind: "ask_name",
       };
@@ -486,7 +486,7 @@ export async function tryFastPath(
         return { handled: true, say: result.ask, toolCalls: calls, kind: "item_pending" };
       }
       if (!result.error) {
-        return { handled: true, say: "Anything else, mate?", toolCalls: calls, kind: "item_added" };
+        return { handled: true, say: "Anything else?", toolCalls: calls, kind: "item_added" };
       }
       return NOT_HANDLED; // add failed unexpectedly -> LLM
     }
@@ -557,7 +557,7 @@ export async function tryFastPath(
         });
         if (!result.error) {
           // Added (executor cleared pendingItem). Next question, if any.
-          return { handled: true, say: "Anything else, mate?", toolCalls: calls, kind: "pending_fill" };
+          return { handled: true, say: "Anything else?", toolCalls: calls, kind: "pending_fill" };
         }
         // Another required group still missing: the executor re-stashed the
         // pending item WITH the options we just merged — ask the next one.
@@ -628,10 +628,10 @@ export async function tryFastPath(
       });
       if (result.error) return NOT_HANDLED; // validation said no -> LLM takes over
     }
-    // What's next? The following missing required group, or "Anything else, mate?"
+    // What's next? The following missing required group, or "Anything else?"
     const fresh = await getOrderWithItems(ctx.db, state.draftOrderId);
     const stillMissing = fresh ? await missingRequiredGroups(ctx, fresh) : [];
-    const say = stillMissing.length > 0 ? `${stillMissing[0]!.groupName}?` : "Anything else, mate?";
+    const say = stillMissing.length > 0 ? `${stillMissing[0]!.groupName}?` : "Anything else?";
     return { handled: true, say, toolCalls: calls, kind };
   }
 

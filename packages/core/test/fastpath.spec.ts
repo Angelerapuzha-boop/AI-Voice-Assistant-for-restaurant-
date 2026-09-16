@@ -164,7 +164,7 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "Hi, Welcome to Meat Box, what can I get you?";
     const res = await agent.handleTurn("hey there");
     expect(res.fastPath).toBe("greeting_ack");
-    expect(res.text).toMatch(/get ya/i);
+    expect(res.text).toMatch(/get for you/i);
     expect(agent.state.draftOrderId).toBeFalsy(); // no order created by a greeting
   });
 
@@ -199,7 +199,7 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "Chips and salad, or rice and salad?";
     const turn = await agent.handleTurn("chips and salad");
     expect(turn.fastPath).toBe("pending_fill");
-    expect(turn.text).toBe("Anything else, mate?");
+    expect(turn.text).toBe("Anything else?");
     expect(agent.state.pendingItem).toBeNull();
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     const line = order!.items.find((i) => i.nameSnapshot === "Chicken Meatbox");
@@ -215,7 +215,7 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "Anything else?";
     const turn = await agent.handleTurn("garlic on both");
     expect(turn.fastPath).toBe("optional_fill");
-    expect(turn.text).toBe("Anything else, mate?");
+    expect(turn.text).toBe("Anything else?");
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     for (const item of order!.items) {
       expect(item.modifiers.map((m) => m.nameSnapshot)).toContain("Garlic sauce");
@@ -233,7 +233,7 @@ describe("fast paths (LLM must not be called)", () => {
     const turn = await agent.handleTurn("nah that's it");
     expect(turn.fastPath).toBe("close");
     // Owner rule: grand total + name + type, confirm once, NO item read-back.
-    expect(turn.text).toMatch(/^Righto, that's .+, takeaway for Kev\. Confirm\?$/);
+    expect(turn.text).toMatch(/^That's .+, takeaway for Kev\. Confirm\?$/);
     expect(turn.text.toLowerCase()).toContain("dollars");
     expect(turn.text.toLowerCase()).not.toContain("meatbox");
   });
@@ -246,10 +246,10 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "Anything else?";
     const turn1 = await agent.handleTurn("that's all");
     expect(turn1.fastPath).toBe("ask_name");
-    expect(turn1.text).toBe("Righto, what name's it under, mate?");
+    expect(turn1.text).toBe("What name shall I put it under?");
     const turn2 = await agent.handleTurn("it's Kevin");
     expect(turn2.fastPath).toBe("name_close");
-    expect(turn2.text).toMatch(/^Righto, that's .+, takeaway for Kevin\. Confirm\?$/);
+    expect(turn2.text).toMatch(/^That's .+, takeaway for Kevin\. Confirm\?$/);
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.customerName).toBe("Kevin");
   });
@@ -263,7 +263,7 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "I still need a name for the order.";
     const turn = await agent.handleTurn("Kevin");
     expect(turn.fastPath).toBe("name_close");
-    expect(turn.text).toMatch(/^Righto, that's .+, takeaway for Kevin\. Confirm\?$/);
+    expect(turn.text).toMatch(/^That's .+, takeaway for Kevin\. Confirm\?$/);
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.customerName).toBe("Kevin");
   });
@@ -277,7 +277,7 @@ describe("fast paths (LLM must not be called)", () => {
     // No "no" first — the caller just gives a name with a lead-in.
     const turn = await agent.handleTurn("under Sam");
     expect(turn.fastPath).toBe("name_close");
-    expect(turn.text).toMatch(/^Righto, that's .+, takeaway for Sam\. Confirm\?$/);
+    expect(turn.text).toMatch(/^That's .+, takeaway for Sam\. Confirm\?$/);
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.customerName).toBe("Sam");
   });
@@ -310,7 +310,7 @@ describe("fast paths (LLM must not be called)", () => {
     const turn = await agent.handleTurn("yep");
     expect(turn.fastPath).toBe("confirm_yes");
     expect(turn.endCall).toBe(true);
-    expect(turn.text).toMatch(/^Too easy/);
+    expect(turn.text).toMatch(/^Done\./);
     expect(turn.text).toMatch(/About \d+ minutes/);
     expect(turn.text).toContain("text");
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
@@ -325,7 +325,7 @@ describe("fast paths (LLM must not be called)", () => {
     agent.state.lastAssistantText = "Anything else?";
     const turn = await agent.handleTurn("hang on a sec");
     expect(turn.fastPath).toBe("wait");
-    expect(turn.text).toBe("No worries.");
+    expect(turn.text).toBe("Yep.");
   });
 });
 
@@ -339,7 +339,7 @@ describe("tryFastPathOnly (partial probe)", () => {
     const res = await agent.tryFastPathOnly("garlic on both");
     expect(res).not.toBeNull();
     expect(res!.fastPath).toBe("optional_fill");
-    expect(res!.text).toBe("Anything else, mate?");
+    expect(res!.text).toBe("Anything else?");
   });
 
   it("returns null when the turn needs the LLM (no side effects, no speech)", async () => {
