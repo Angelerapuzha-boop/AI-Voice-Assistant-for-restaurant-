@@ -46,8 +46,17 @@ switch ($App) {
         $existing = Get-CimInstance Win32_Process -Filter "Name = 'cloudflared.exe'" |
             Where-Object { $_.CommandLine -match 'meatbox' }
         if ($existing) { exit 0 }
-        $log = Join-Path $logDir 'tunnel.log'
-        RollLog $log
-        & cloudflared tunnel --config (Join-Path $repo 'infra\cloudflared\config.yml') run meatbox-voice *>> $log
+        # Full cloudflared path — a bare `cloudflared` relies on the task's PATH
+        # (which lacks the install dir) and silently failed, causing a Cloudflare
+        # 1033 outage (2026-09-16).
+        $cf = 'C:\Program Files (x86)\cloudflared\cloudflared.exe'
+        if (-not (Test-Path $cf)) {
+            $cmd = Get-Command cloudflared.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $cf = $cmd.Source }
+        }
+        $cfg = Join-Path $repo 'infra\cloudflared\config.yml'
+        # Spawn DETACHED (Start-Process, not blocking `&`): the connector then
+        # survives this reap-prone hidden task session instead of dying with it.
+        Start-Process -FilePath $cf -ArgumentList "tunnel --config `"$cfg`" run meatbox-voice" -WindowStyle Hidden
     }
 }
