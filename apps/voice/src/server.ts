@@ -369,6 +369,7 @@ async function warmTtsCacheAtBoot(): Promise<void> {
     "Anything else?",
     "What name shall I put it under?",
     "What can I get for you?",
+    "One sec.", // filler spoken while the LLM thinks on a customisation turn
     "Yep.",
   ]);
   if (settings.aiGreeting) phrases.add(settings.aiGreeting);

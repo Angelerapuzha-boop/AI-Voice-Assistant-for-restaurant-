@@ -50,6 +50,11 @@ const ENDPOINT_SILENCE_MS = 300; // silence after speech = end of utterance (the
 // knob is only tens of ms. (STT here is ElevenLabs Scribe + our own VAD, not Deepgram.)
 const BARGE_SPEECH_MS = 120; // sustained speech during playback = barge-in
 const MIN_UTTERANCE_MS = 200; // ignore blips shorter than this
+// Short, plain filler spoken ONLY when a turn actually needs the LLM (a
+// customisation / ambiguous request, ~1.2s think) — never on the instant
+// fast-path turns — so the AI's thinking time isn't dead air. Cached for
+// instant playback (see the boot warm list).
+const AI_FILLER = "One sec.";
 
 export interface MediaSessionDeps {
   createLlm: (model: string | undefined) => Llm;
@@ -273,14 +278,24 @@ export class MediaStreamSession {
       if (!result) return;
       this.segmentHandled = true; // committed transcript for this segment will be ignored
     } else {
-      // Committed transcript: fast path OR the LLM understands it.
-      let reply = "";
-      result = await this.agent.handleTurn(
-        text,
-        { onText: (tok) => (reply += tok) },
-        this.abort.signal,
-      );
-      if (!result.text && reply.trim()) result = { ...result, text: reply.trim() };
+      // Committed transcript. Probe the fast path first (no LLM). If it handles
+      // the turn, reply instantly from cache — no filler. If not, this is a
+      // genuine AI turn: fire a short plain filler ("One sec.") WHILE Claude
+      // thinks, so the ~1.2s isn't dead air, then speak the real reply.
+      const fast = await this.agent.tryFastPathOnly(text);
+      if (fast) {
+        result = fast;
+      } else {
+        const fillerPlaying = this.speak(AI_FILLER); // concurrent — covers the think
+        let reply = "";
+        result = await this.agent.handleTurn(
+          text,
+          { onText: (tok) => (reply += tok) },
+          this.abort.signal,
+        );
+        if (!result.text && reply.trim()) result = { ...result, text: reply.trim() };
+        await fillerPlaying; // ensure the filler finished before the real reply
+      }
     }
     const speakText = (result.text || "").trim();
     const turnMs = Date.now() - turnStarted;
