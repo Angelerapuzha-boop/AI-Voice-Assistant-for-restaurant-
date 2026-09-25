@@ -4,6 +4,7 @@ import {
   buildKeyterms,
   buildMenuCatalog,
   endCall,
+  enqueueNotification,
   env,
   getDb,
   getDefaultRestaurant,
@@ -255,6 +256,9 @@ export class MediaStreamSession {
   // against "repeating continuously, no ending" (Kevin 2026-09-25).
   private lastReplyNorm = "";
   private stuckRepeats = 0;
+  // Where to SMS the owner when a call is flagged for review (Kevin 2026-09-25:
+  // "alert me the instant any call is flagged" — so nothing is silently missed).
+  private ownerAlertNumber = "";
   private lastPlayoutEndAt = 0; // epoch ms when the last spoken audio finishes playing
   private ambienceTimer: ReturnType<typeof setInterval> | null = null;
   private ambiencePos = 0; // shared loop cursor for the ambience bed
@@ -443,6 +447,7 @@ export class MediaStreamSession {
       return;
     }
 
+    this.ownerAlertNumber = settings.ownerSmsNumber || env.OWNER_NOTIFICATION_PHONE || "";
     this.agent = new OrderAgent(llm, {
       db,
       restaurant,
@@ -896,14 +901,34 @@ export class MediaStreamSession {
     if (!this.callId) return;
     const state = this.agent?.state;
     let outcome: CallOutcome = forceOutcome ?? state?.outcome ?? "NO_ORDER";
+    // Reason the call is flagged for staff follow-up (empty = not flagged).
+    let flaggedReason = forceOutcome === "NEEDS_REVIEW" ? "the call had trouble and was flagged" : "";
     if (state?.draftOrderId && !state.reviewLinkSent) {
       const order = await getOrder(db, state.draftOrderId);
       if (order && order.status === "draft" && (order.subtotalCents > 0 || order.customerName)) {
         await markNeedsReview(db, order.id, "Call ended before the order was confirmed.");
         if (outcome === "NO_ORDER") outcome = "CALL_DROPPED";
+        if (!flaggedReason) flaggedReason = "a customer started an order but didn't confirm it";
       }
     }
     await endCall(db, this.callId, { status: "completed", outcome });
+    // Owner alert on a flagged call (Kevin 2026-09-25): queue an owner_sms so
+    // the shop is told the instant a call needs follow-up — never silently lost.
+    // Goes through the same SMS worker + SMS_MODE gate as every other message
+    // (log-mode boxes only log it). Best-effort — a failed alert never breaks
+    // call teardown.
+    if (flaggedReason && this.ownerAlertNumber) {
+      try {
+        await enqueueNotification(db, {
+          orderId: state?.draftOrderId ?? null,
+          kind: "owner_sms",
+          toNumber: this.ownerAlertNumber,
+          body: `Meatbox: a call was flagged for review — ${flaggedReason}. Check the orders dashboard to follow up.`,
+        });
+      } catch (err) {
+        this.deps.log("owner alert enqueue failed", { error: (err as Error)?.message });
+      }
+    }
   }
 
   private async onClose(): Promise<void> {
