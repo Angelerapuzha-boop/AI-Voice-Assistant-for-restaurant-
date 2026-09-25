@@ -8,6 +8,7 @@ import {
   getModifierGroups,
   getSettings,
   groupQuestion,
+  listOptions,
   listItems,
   runMigrations,
   settlePayment,
@@ -15,10 +16,11 @@ import {
   getSquareConnection,
 } from "@meatbox/core";
 import { warmPhrases } from "./tts-cache";
+import { activeVoiceId } from "./voice-providers";
 import { conversationRelayTwiml, elevenLabsSipTwiml, mediaStreamTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
-import { MediaStreamSession } from "./media-stream-session";
+import { AI_FILLERS, MediaStreamSession } from "./media-stream-session";
 import { checkBridgeSecret, ElevenLabsBridge, verifyPostCallSignature } from "./elevenlabs-bridge";
 import { startMaintenanceWorker, startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
@@ -147,8 +149,22 @@ app.post("/twilio/voice", async (req, reply) => {
   reply.type("text/xml");
   // Custom media-stream pipeline: our own audio + Sally at fast-path speed.
   if (env.VOICE_STACK === "custom") {
-    req.log.info({ callSid }, "routing call to custom media-stream pipeline");
-    return mediaStreamTwiml({ wssBase: env.VOICE_PUBLIC_URL, from: params.From ?? "" });
+    // TEMP test routing (2026-09-17): the owner's own phones are sent to the
+    // us-east-1 cloud box for live testing; every real customer stays on this
+    // (Sydney) box. A non-matching number defaults to Sydney. Remove after cutover.
+    const TEST_CLOUD_CALLERS = new Set(["+61455500001", "+61455500002", "+15550000005"]);
+    // Sydney (ap-southeast-2) all-Australian box: Olivia (Polly) + Transcribe.
+    // Env override so the target can change (quick tunnel -> stable) without a
+    // code edit; falls back to the current AU quick tunnel.
+    const TEST_CLOUD_WSS =
+      env.TEST_CLOUD_WSS || "https://bouquet-beast-contain-exposed.trycloudflare.com";
+    const toCloud = TEST_CLOUD_CALLERS.has(params.From ?? "");
+    const wssBase = toCloud ? TEST_CLOUD_WSS : env.VOICE_PUBLIC_URL;
+    req.log.info(
+      { callSid, routedTo: toCloud ? "cloud-test" : "sydney" },
+      "routing call to custom media-stream pipeline",
+    );
+    return mediaStreamTwiml({ wssBase, from: params.From ?? "" });
   }
   // ElevenLabs stack: hand the call to the hosted agent over SIP. The
   // Dial action falls back to the relay stack if the SIP leg fails.
@@ -367,9 +383,11 @@ async function warmTtsCacheAtBoot(): Promise<void> {
   const settings = await getSettings(db, restaurant.id);
   const phrases = new Set<string>([
     "Anything else?",
+    "Done. Anything else?",
     "What name shall I put it under?",
     "What can I get for you?",
-    "One sec.", // filler spoken while the LLM thinks on a customisation turn
+    "No worries, I've cleared that. What else can I get you?",
+    ...AI_FILLERS, // the rotated fillers, spoken only on a genuine (rare) LLM turn
     "Yep.",
   ]);
   if (settings.aiGreeting) phrases.add(settings.aiGreeting);
@@ -379,9 +397,12 @@ async function warmTtsCacheAtBoot(): Promise<void> {
     for (const g of groups) {
       const opts = g.modifiers.filter((m) => m.isAvailable).map((m) => m.name);
       phrases.add(groupQuestion(g.name, opts));
+      // The "what have you got?" read-back of the same group, so it replays
+      // instantly too.
+      phrases.add(listOptions(opts));
     }
   }
-  await warmPhrases(env.ELEVENLABS_VOICE_ID, [...phrases], (m) => app.log.info(m));
+  await warmPhrases(activeVoiceId(), [...phrases], (m) => app.log.info(m));
 }
 void warmTtsCacheAtBoot().catch((err) => app.log.warn({ err }, "tts cache warm failed"));
 

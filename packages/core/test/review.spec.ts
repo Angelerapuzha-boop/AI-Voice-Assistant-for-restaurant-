@@ -8,7 +8,7 @@ import {
   findOrderByReviewToken,
 } from "../src/domain/review";
 import { recalcQueueEstimates } from "../src/domain/eta";
-import { executeTool, initialAgentState } from "../src/agent/tools";
+import { executeTool, initialAgentState, type AgentContext } from "../src/agent/tools";
 import {
   findItemByName,
   modifierId,
@@ -220,6 +220,48 @@ describe("visual confirmation: review link", () => {
     expect(state.outcome).toBe("REVIEW_LINK_SENT");
     const fresh = await getOrderWithItems(db, order.id);
     expect(fresh!.status).toBe("draft");
+  });
+});
+
+// India call 2026-09-25: the LLM called create_order_draft with customerName
+// "pending" and the close read "takeaway for pending". Placeholder names must be
+// dropped at BOTH tool entry points so the name step asks for a real one.
+describe("placeholder customer names are dropped (never spoken as the name)", () => {
+  const toolCtx = (): AgentContext => ({
+    db,
+    restaurant: ctx.restaurant,
+    settings: ctx.settings,
+    hours: ctx.hours,
+    callerNumber: PHONE,
+    now: () => KITCHEN_OPEN,
+  });
+  for (const bad of ["pending", "customer", "takeaway", "placeholder", "guest", "PENDING"]) {
+    it(`create_order_draft drops "${bad}"`, async () => {
+      const state = initialAgentState();
+      const r = await executeTool(toolCtx(), state, "create_order_draft", {
+        orderType: "takeaway",
+        customerName: bad,
+      });
+      expect(r.error).toBeFalsy();
+      const order = await getOrderWithItems(db, state.draftOrderId!);
+      expect(order!.customerName ?? "", bad).toBeFalsy();
+    });
+    it(`set_order_details drops "${bad}"`, async () => {
+      const state = initialAgentState();
+      await executeTool(toolCtx(), state, "create_order_draft", { orderType: "takeaway" });
+      await executeTool(toolCtx(), state, "set_order_details", { customerName: bad });
+      const order = await getOrderWithItems(db, state.draftOrderId!);
+      expect(order!.customerName ?? "", bad).toBeFalsy();
+    });
+  }
+  it("a real name is still accepted at draft creation", async () => {
+    const state = initialAgentState();
+    await executeTool(toolCtx(), state, "create_order_draft", {
+      orderType: "takeaway",
+      customerName: "Jenny",
+    });
+    const order = await getOrderWithItems(db, state.draftOrderId!);
+    expect(order!.customerName).toBe("Jenny");
   });
 });
 

@@ -43,6 +43,21 @@ function agentCtx(): AgentContext {
 }
 
 describe("agent engine + tools", () => {
+  it("tells the LLM the current order after a fast-path add (no duplicate item — AU call 2026-09-22)", async () => {
+    // A later LLM turn responds with plain text; we only care what SYSTEM it saw.
+    const llm = new FakeLlm([textTurn("Sure.")]);
+    const agent = new OrderAgent(llm, agentCtx());
+    // Fast path adds a beef ribs plate (no required options) and starts a draft.
+    const t1 = await agent.handleTurn("beef ribs");
+    expect(t1.fastPath).toBe("item_added");
+    // Next turn falls through to the LLM.
+    await agent.handleTurn("what else is good");
+    const sys = (llm.seenParams[0] as { system: string }).system;
+    expect(sys).toMatch(/ORDER ALREADY IN PROGRESS/);
+    expect(sys).toContain("Beef Ribs Plate");
+    expect(sys).toMatch(/NEVER call create_order_draft again/);
+  });
+
   it("full ordering flow: mutations carry current state, one read-back, confirm (scenarios 1 & 7)", async () => {
     const item = await findItemByName(db, "Chicken Meatbox");
     const base = await modifierId(db, "Chicken Meatbox", "Chips & Salad");
@@ -76,7 +91,11 @@ describe("agent engine + tools", () => {
     expect(details!.result.total).toBe("$19.95"); // full cart in the response
 
     const turn3 = await agent.handleTurn("Yes that's right");
-    const confirm = turn3.toolCalls.find((c) => c.name === "confirm_order");
+    // The LLM's close ended "All good?" — the deterministic layer now catches
+    // that confirmation itself (no LLM round-trip), so the tool is fast-tagged.
+    const confirm = turn3.toolCalls.find(
+      (c) => c.name === "confirm_order" || c.name === "fast:confirm_order",
+    );
     expect(confirm!.result.error).toBeUndefined(); // no double-confirm loop
     expect(confirm!.result.confirmed).toBe(true);
     expect(String(confirm!.result.orderNumber)).toMatch(/^MB\d+$/);
@@ -193,7 +212,9 @@ describe("agent engine + tools", () => {
     };
     const agent = new OrderAgent(failing, agentCtx());
     // A question (not a bare greeting or fast-path turn) so it reaches the LLM.
-    const turn1 = await agent.handleTurn("what have you got?");
+    // A genuinely unclear utterance that must reach the LLM (a menu question is
+    // now answered deterministically, so it wouldn't exercise LLM-fail recovery).
+    const turn1 = await agent.handleTurn("surprise me");
     expect(turn1.text).toMatch(/say it again/i);
     expect(turn1.endCall).toBe(false);
     const turn2 = await agent.handleTurn("still there?");
@@ -215,7 +236,10 @@ describe("agent engine + tools", () => {
       ],
     ]);
     const agent = new OrderAgent(llm, agentCtx());
-    await agent.handleTurn("kebab");
+    // A vague opener that isn't a clean item/family, so it reaches the LLM
+    // (which scripts the draft + item add) — "kebab" alone now deterministically
+    // asks which kind, so it would no longer fall through to the LLM here.
+    await agent.handleTurn("what do you recommend?");
     await agent.handleTurn("(garbled)");
     const order = await getOrderWithItems(db, agent.state.draftOrderId!);
     expect(order!.status).toBe("needs_review");

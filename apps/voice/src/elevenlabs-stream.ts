@@ -31,7 +31,11 @@ export class ScribeStream {
   private closed = false;
   private lastPartial = ""; // most recent live partial for the current segment
 
-  constructor(private readonly handlers: ScribeHandlers) {
+  constructor(
+    private readonly handlers: ScribeHandlers,
+    /** Menu vocabulary to bias transcription toward (keyterm prompting). */
+    private readonly keyterms: string[] = [],
+  ) {
     this.connect();
   }
 
@@ -45,8 +49,19 @@ export class ScribeStream {
     // detection was mis-hearing English as Arabic/Portuguese and returning
     // garbage (Kevin's India->AU call, 2026-09-15), which missed the fast path
     // and stalled on the LLM. This restaurant is English-only.
+    // Keyterm prompting: bias the model toward the menu's distinctive words
+    // ("kebab", "gozleme", "meatbox") so a degraded line doesn't garble them.
+    // Repeated `keyterms=` params is the ONLY accepted encoding (JSON/CSV are
+    // rejected — verified against the live API); each term <=20 chars, <=50.
+    const kt = this.keyterms
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0 && t.length <= 20)
+      .slice(0, 50)
+      .map((t) => `&keyterms=${encodeURIComponent(t)}`)
+      .join("");
     const url =
-      "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&language_code=en";
+      "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&language_code=en" +
+      kt;
     const ws = new WebSocket(url, { headers: { "xi-api-key": XI_KEY() } });
     this.ws = ws;
     ws.on("open", () => {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { openSallyStream } from "./elevenlabs-stream";
+import { openTts } from "./voice-providers";
 
 /**
  * Sally audio cache for the DETERMINISTIC fast-path phrases.
@@ -66,10 +66,12 @@ export function isCacheablePhrase(text: string): boolean {
   return t.length > 0 && t.length <= 80 && !/\d/.test(t);
 }
 
-/** One-shot synthesis of a phrase to mu-law 8k bytes (collects the stream). */
-export async function synthesizeUlaw(voiceId: string, text: string): Promise<Buffer> {
+/** One-shot synthesis of a phrase to mu-law 8k bytes (collects the stream), via
+ * whichever TTS provider is active (Sally or Olivia). The voiceId is only the
+ * cache key; the provider is chosen by env. */
+export async function synthesizeUlaw(_voiceId: string, text: string): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  const stream = openSallyStream(voiceId);
+  const stream = openTts();
   await stream.speak(text, (c) => chunks.push(c));
   return Buffer.concat(chunks);
 }

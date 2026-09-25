@@ -7,6 +7,7 @@ import {
   type AgentState,
 } from "./tools";
 import { tryFastPath } from "./fastpath";
+import { getOrderWithItems } from "../domain/orders";
 import type { Llm, LlmMessage } from "./llm";
 
 export interface ToolCallRecord {
@@ -102,6 +103,8 @@ export class OrderAgent {
     try {
       const fast = await tryFastPath(this.ctx, this.state, userText, opts);
       if (fast.handled) {
+        // A turn the caller was actually understood on clears the garbled streak.
+        if (fast.kind !== "garbled_reask") this.state.garbledReaskCount = 0;
         this.messages.push({ role: "user", content: userText });
         if (fast.say) {
           handlers.onText?.(fast.say);
@@ -132,13 +135,27 @@ export class OrderAgent {
     handlers: TurnHandlers = {},
     signal?: AbortSignal,
   ): Promise<AgentTurnResult> {
-    const system = this.system;
-
     // Deterministic dialogue control first: predictable turns answer in
     // milliseconds and never touch the LLM. Anything ambiguous falls through.
     const fast = await this.tryFastPathOnly(userText, handlers);
     if (fast) return fast;
     // tryFastPathOnly set currentCallerText (needed by the confirm guard).
+
+    // The fast path may have already started an order (created a draft, added
+    // items) WITHOUT those tool calls landing in the LLM's message history — so
+    // the LLM, blind to them, would create a SECOND order and re-add items
+    // (live AU call 2026-09-22: two chicken kebabs). Tell it the current order
+    // state so it always adds to the existing draft.
+    let system = this.system;
+    if (this.state.draftOrderId) {
+      const current = await getOrderWithItems(this.ctx.db, this.state.draftOrderId);
+      if (current && current.status === "draft" && current.items.length > 0) {
+        const lines = current.items.map((i) => `${i.quantity}x ${i.nameSnapshot}`).join(", ");
+        system +=
+          `\n\n[ORDER ALREADY IN PROGRESS this call — a draft exists containing: ${lines}. ` +
+          `Add any new items to THIS order. NEVER call create_order_draft again, and never re-add an item already listed here.]`;
+      }
+    }
 
     // Everything this turn appends is rolled back to here on failure, so
     // an abort or API error mid-tool-loop can never leave a dangling

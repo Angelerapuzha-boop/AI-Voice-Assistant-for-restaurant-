@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-polly": "^3.679.0",
+    "@aws-sdk/client-transcribe-streaming": "^3.679.0",
     "@fastify/websocket": "^11.2.0",
     "@meatbox/core": "workspace:*",
     "fastify": "^5.5.0"

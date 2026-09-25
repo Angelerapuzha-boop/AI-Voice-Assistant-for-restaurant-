@@ -119,6 +119,32 @@ describe("returning customers, ETA and tracking (master-prompt add-ons)", () => 
     await db.query(`UPDATE menu_items SET price_cents = 1995 WHERE name = 'Chicken Meatbox'`);
   });
 
+  it("PROACTIVE 'same as last time?' -> a bare 'yep' reorders instantly, no LLM", async () => {
+    await placeConfirmedOrder();
+    const FORBIDDEN = {
+      stream() {
+        throw new Error("LLM must not run on the proactive repeat");
+      },
+    };
+    const agent = new OrderAgent(FORBIDDEN, {
+      db,
+      restaurant: ctx.restaurant,
+      settings: ctx.settings,
+      hours: ctx.hours,
+      callerNumber: PHONE,
+      now: () => new Date("2026-09-10T19:00:00+08:00"),
+    } satisfies AgentContext);
+    // The session greeted them "Welcome back… Same as last time?" and flagged it.
+    agent.state.repeatOffered = true;
+    agent.state.lastAssistantText = "Welcome back to Meat Box! Same as last time?";
+    const turn = await agent.handleTurn("yep");
+    expect(turn.fastPath).toBe("repeat_close");
+    expect(turn.text).toMatch(/sound good\?$/i);
+    expect(turn.text.toLowerCase()).toContain("rita"); // their name carried over
+    const repeat = turn.toolCalls.find((c) => c.name === "fast:repeat_last_order");
+    expect(repeat!.result.repeatedLines).toBe(1);
+  });
+
   it("repeat with a sold-out item reports the change instead of failing", async () => {
     await placeConfirmedOrder();
     await db.query(`UPDATE menu_items SET is_sold_out = true WHERE name = 'Chicken Meatbox'`);

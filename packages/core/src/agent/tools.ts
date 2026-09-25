@@ -41,6 +41,30 @@ import type {
 } from "../types";
 import type { LlmToolDef } from "./llm";
 
+// Order-type / greeting / placeholder words the LLM sometimes writes into the
+// customer NAME field (live calls read back "takeaway for Takeaway", "for
+// placeholder", "for pending"). Any of these is dropped so the name step still
+// runs and asks for a REAL name. Shared by create_order_draft AND
+// set_order_details so a placeholder can't sneak in at EITHER entry point
+// (India call 2026-09-25: create_order_draft was called with name "pending" and
+// the close said "takeaway for pending").
+const NON_NAME_VALUES = new Set([
+  "takeaway", "take away", "pickup", "pick up", "delivery", "dine in",
+  "dinein", "dine-in", "collection", "eat in", "eatin", "here", "order",
+  "an order", "takeout", "take out",
+  "customer", "the customer", "a customer", "guest", "unknown", "none",
+  "no name", "hello", "hi", "hey", "testing", "test",
+  "caller", "the caller", "placeholder", "and", "another", "new",
+  "new order", "pending", "pending order", "tbd", "n/a", "na",
+]);
+
+/** A caller name the LLM passed, or undefined if it's a placeholder/non-name. */
+function sanitizeCustomerName(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const name = String(raw).trim();
+  return name && !NON_NAME_VALUES.has(name.toLowerCase()) ? name : undefined;
+}
+
 export interface AgentContext {
   db: pg.Pool;
   restaurant: Restaurant;
@@ -84,6 +108,43 @@ export interface AgentState {
     removals: string[];
     specialInstructions?: string;
   } | null;
+  /**
+   * The caller named a generic item family with several variants ("a kebab" ->
+   * chicken/lamb/mixed/falafel). We asked which one; the fast path resolves
+   * their answer to the specific item without the LLM.
+   */
+  pendingFamily: {
+    familyWord: string;
+    candidates: string[]; // menu item names
+    quantity: number;
+  } | null;
+  /**
+   * A COMPOUND order ("two chicken meatboxes and a mixed meatbox") adds its
+   * items one at a time; when one needs a required option (a base), the rest
+   * wait here and are added after the caller answers, draining the queue.
+   */
+  pendingQueue?: { menuItemName: string; quantity: number; modifierNames?: string[] }[];
+  /**
+   * Consecutive times the fast path has instantly re-asked a required option
+   * question because the caller's answer was unclear (usually a garbled line).
+   * Capped so a stuck caller falls to the LLM, which can rephrase or help.
+   */
+  optionReaskCount?: number;
+  /** One-shot: a single "…or a drink?" add-on suggestion has been offered. */
+  suggestedAddon?: boolean;
+  /** The caller talked OVER the assistant (barge-in) just before this turn — so
+   * the captured words are likely an overlap; if unrecognised, ask them to
+   * repeat rather than guess. Set by the media session, cleared each turn. */
+  afterBarge?: boolean;
+  /** Consecutive instant "sorry, say that again?" re-asks for unclear/overlapped
+   * input; capped so a stuck caller still reaches the LLM. */
+  garbledReaskCount?: number;
+  /** Consecutive "sorry, can I get a name?" re-asks; capped so a garbled line
+   * (name arriving as "J", "J J") falls to the LLM instead of looping. */
+  nameReaskCount?: number;
+  /** A returning caller was greeted with "Same as last time?"; their next
+   * answer (yes -> repeat their order, no -> order fresh) is handled fast. */
+  repeatOffered?: boolean;
 }
 
 export function initialAgentState(): AgentState {
@@ -98,6 +159,14 @@ export function initialAgentState(): AgentState {
     lastAssistantText: "",
     currentCallerText: "",
     pendingItem: null,
+    pendingFamily: null,
+    pendingQueue: [],
+    optionReaskCount: 0,
+    suggestedAddon: false,
+    repeatOffered: false,
+    afterBarge: false,
+    garbledReaskCount: 0,
+    nameReaskCount: 0,
   };
 }
 
@@ -670,7 +739,9 @@ async function executeToolInner(
       const draft = await createDraft(db, {
         restaurantId: restaurant.id,
         customerPhone: ctx.callerNumber ?? "",
-        customerName: input.customerName ? String(input.customerName) : undefined,
+        // Drop a placeholder name ("pending", "customer", "takeaway"…) so it
+        // never reaches the order / close — the name step then asks for a real one.
+        customerName: sanitizeCustomerName(input.customerName),
         orderType: input.orderType === "dine_in" ? "dine_in" : "takeaway",
         callId: ctx.callId,
       });
@@ -881,9 +952,13 @@ async function executeToolInner(
           }
         }
       }
+      // Never let an order-type / greeting / placeholder word become the
+      // customer's NAME (live calls read back "takeaway for Takeaway", "for
+      // pending"). Drop it so the name step still runs and asks for a real name.
+      const cleanCustomerName = sanitizeCustomerName(input.customerName);
       const updated = await setOrderDetails(db, {
         orderId: order.id,
-        customerName: input.customerName !== undefined ? String(input.customerName) : undefined,
+        customerName: cleanCustomerName,
         customerPhone: input.customerPhone !== undefined ? String(input.customerPhone) : undefined,
         orderType:
           input.orderType === "dine_in" || input.orderType === "takeaway"

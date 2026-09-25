@@ -34,6 +34,10 @@ const envSchema = z.object({
 
   OWNER_NOTIFICATION_PHONE: z.string().default(""),
   SMS_MODE: z.enum(["live", "log"]).default("log"),
+  // Spoken placeholder ("one moment") on a genuine LLM turn. off = immediate
+  // reply with a silent think; on = a short filler covers the pause. Owner-
+  // toggled without a redeploy.
+  AI_FILLER: z.enum(["on", "off"]).default("off"),
 
   // Call background atmosphere: continuous = looping ambience started at
   // call setup (only if ConversationRelay mixes it under TTS — verified
@@ -60,6 +64,22 @@ const envSchema = z.object({
   ELEVENLABS_VOICE_ID: z.string().default("Xb7hH8MSUJpSbSDYk0k2"),
   ELEVENLABS_LLM: z.string().default("gemini-2.0-flash"),
 
+  // Speech provider selection for the custom stack. Default keeps ElevenLabs
+  // (Sally + Scribe, US). Set to polly/transcribe for the all-Australian stack
+  // (Amazon Polly "Olivia" TTS + Amazon Transcribe STT, Sydney) — runs on the
+  // account's own AWS creds (instance role on EC2, or the keys below).
+  TTS_PROVIDER: z.enum(["elevenlabs", "polly"]).default("elevenlabs"),
+  STT_PROVIDER: z.enum(["elevenlabs", "transcribe"]).default("elevenlabs"),
+  POLLY_VOICE_ID: z.string().default("Olivia"), // en-AU female (neural/generative)
+  POLLY_ENGINE: z.enum(["generative", "neural", "standard"]).default("generative"),
+  TRANSCRIBE_LANGUAGE: z.string().default("en-AU"),
+  // Region for Polly/Transcribe. Phase 1 proves the voice from us-east-1 (next
+  // to the current box); Phase 2 moves everything to ap-southeast-2 (Sydney).
+  AWS_REGION: z.string().default("us-east-1"),
+  // Optional static creds; on EC2 prefer an attached IAM role (leave blank).
+  AWS_ACCESS_KEY_ID: z.string().default(""),
+  AWS_SECRET_ACCESS_KEY: z.string().default(""),
+
   // n8n event webhook (optional): order.confirmed / order.needs_review /
   // owner_sms_failed events are POSTed here, HMAC-signed with the secret.
   N8N_WEBHOOK_URL: z.string().default(""),
@@ -80,6 +100,9 @@ const envSchema = z.object({
   MOCK_TERMINAL_BEHAVIOUR: z.enum(["approve", "decline"]).default("approve"),
   MOCK_TERMINAL_DELAY_SECONDS: z.coerce.number().default(4),
 
+  // TEMP test routing target (owner's own numbers -> this cloud/AU box). Blank
+  // = use the code fallback. Remove with the caller-ID routing after cutover.
+  TEST_CLOUD_WSS: z.string().default(""),
   APP_URL: z.string().default("http://127.0.0.1:4810"),
   VOICE_WEBSOCKET_URL: z.string().default("ws://127.0.0.1:4811/twilio/relay"),
   VOICE_PUBLIC_URL: z.string().default("http://127.0.0.1:4811"),

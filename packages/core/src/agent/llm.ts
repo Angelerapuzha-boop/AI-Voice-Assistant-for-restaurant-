@@ -35,10 +35,15 @@ export interface Llm {
 }
 
 export function createAnthropicLlm(model?: string): Llm {
-  if (!env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is not configured");
-  }
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  // Lazy: the deterministic fast path answers most calls with NO LLM, so a
+  // missing key must not stop the call from even starting (it would otherwise
+  // throw here and the caller hears "not available"). Only an actual LLM turn
+  // — rare, novel speech — requires the key, and it throws at that point.
+  let client: Anthropic | null = null;
+  const getClient = (): Anthropic => {
+    if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not configured");
+    return (client ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY }));
+  };
   const useModel = model || env.ANTHROPIC_MODEL;
 
   return {
@@ -78,14 +83,14 @@ export function createAnthropicLlm(model?: string): Llm {
         ],
         messages: prepared,
         tools,
-      } as Parameters<typeof client.messages.stream>[0];
+      } as Parameters<Anthropic["messages"]["stream"]>[0];
       // Low effort: phone ordering is simple and latency-critical — this
       // keeps Sonnet's instruction-following while answering much faster.
       // Haiku 4.5 does not support the effort parameter (400s on it).
       if (!useModel.includes("haiku")) {
         (request as unknown as Record<string, unknown>).output_config = { effort: "low" };
       }
-      const stream = client.messages.stream(request, { signal: params.signal });
+      const stream = getClient().messages.stream(request, { signal: params.signal });
 
       // Track tool_use blocks so we can emit them complete.
       const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
