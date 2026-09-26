@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type pg from "pg";
 import { OrderAgent } from "../src/agent/engine";
 import type { AgentContext } from "../src/agent/tools";
-import { isFinished, isYes, terseReadback } from "../src/agent/fastpath";
+import { isFinished, isYes, spokenClose, terseReadback } from "../src/agent/fastpath";
 import { addOrderItem, createDraft, getOrderWithItems } from "../src/domain/orders";
 import type { Llm } from "../src/agent/llm";
 import {
@@ -2039,6 +2039,50 @@ describe("audit fixes 2026-09-24", () => {
     agent.state.lastAssistantText = "Anything else?";
     const turn = await agent.handleTurn("no onion");
     expect(turn.fastPath ?? "").toMatch(/removal|modifier_removed/);
+  });
+});
+
+// Large-order read-back (India call MB1150 2026-09-26): a garbled line repeated
+// "pair of chicken kebab" and each was added -> 7 kebabs / $108 confirmed on the
+// total alone. Big orders now read the ITEMS back so it's caught; small orders
+// keep the fast total-only close.
+describe("large-order read-back (catch an inflated order)", () => {
+  it("recites items + 'Correct?' when the order is big by quantity (8 kebabs)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    const id = await draftWith(agent, [{ name: "Chicken Kebab", qty: 8 }], "Dave");
+    const order = await getOrderWithItems(db, id);
+    const close = spokenClose(order!);
+    expect(close).toMatch(/8 chicken kebabs/i);
+    expect(close).toMatch(/correct\?$/i);
+  });
+
+  it("recites items when the order is big by line count (5+ lines)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    const id = await draftWith(
+      agent,
+      [
+        { name: "Chicken Kebab", qty: 1 },
+        { name: "Lamb Kebab", qty: 1 },
+        { name: "Mixed Kebab", qty: 1 },
+        { name: "Falafel Kebab", qty: 1 },
+        { name: "Water", qty: 1 },
+      ],
+      "Dave",
+    );
+    const order = await getOrderWithItems(db, id);
+    const close = spokenClose(order!);
+    expect(close).toMatch(/chicken kebab/i);
+    expect(close).toMatch(/lamb kebab/i);
+    expect(close).toMatch(/correct\?$/i);
+  });
+
+  it("GUARD: a small order keeps the fast total-only close ('Sound good?')", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    const id = await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }], "Dave");
+    const order = await getOrderWithItems(db, id);
+    const close = spokenClose(order!);
+    expect(close).toMatch(/sound good\?$/i);
+    expect(close.toLowerCase()).not.toContain("kebab"); // no item recital
   });
 });
 

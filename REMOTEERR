@@ -1,0 +1,11 @@
+Warning: Permanently added '203.0.113.10' (ED25519) to the list of known hosts.
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+psql: warning: extra command-line argument "outcome" ignored
+ERROR:  unterminated quoted identifier at or near ""SELECT"
+LINE 1: "SELECT
+        ^
+bash: line 4:  — : command not found
+bash: line 4: duration_seconds: command not found
+bash: line 4: s: command not found

@@ -695,6 +695,14 @@ async function menuSummary(ctx: AgentContext): Promise<string> {
  * with the name and type, confirm once). "That's 42 dollars 80, takeaway for
  * Sam. Confirm?"
  */
+/** Naive spoken pluraliser for a menu item name ("chicken kebab" -> "chicken
+ * kebabs", "meatbox" -> "meatboxes"); leaves already-plural names ("chips"). */
+function pluralizeItem(name: string): string {
+  const n = name.toLowerCase();
+  if (n.endsWith("s")) return n;
+  return /(x|ch|sh)$/.test(n) ? `${n}es` : `${n}s`;
+}
+
 export function spokenClose(order: OrderWithItems): string {
   const type = order.orderType === "dine_in" ? "dine-in" : "takeaway";
   const name = realName(order);
@@ -707,6 +715,18 @@ export function spokenClose(order: OrderWithItems): string {
   const first = name.split(/\s+/)[0]?.toLowerCase() ?? "";
   const spell = name && !COMMON_NAMES.has(first) && looksMisheard(first);
   const spelled = spell ? `, that's ${spellName(name)}` : "";
+  // LARGE ORDER -> read the ITEMS back, not just the total, so an inflated or
+  // mis-heard order is caught before it's locked. On a garbled line a caller can
+  // repeat an item and each repeat gets added (India call MB1150: "pair of
+  // chicken kebab" said a few times -> 7 kebabs / $108 confirmed on the total
+  // alone). Only for genuinely big orders (5+ lines or $80+); small orders keep
+  // the fast total-only close (owner rule). Kevin 2026-09-26.
+  if (order.items.length > 0 && (order.items.length >= 5 || order.totalCents >= 8000)) {
+    const items = order.items
+      .map((i) => (i.quantity > 1 ? `${i.quantity} ${pluralizeItem(i.nameSnapshot)}` : i.nameSnapshot.toLowerCase()))
+      .join(", ");
+    return `That's ${items} — ${speakCents(order.totalCents)}, ${type}${name ? ` for ${name}` : ""}${spelled}. Correct?`;
+  }
   return `That's ${speakCents(order.totalCents)}, ${type}${name ? ` for ${name}` : ""}${spelled}. Sound good?`;
 }
 
