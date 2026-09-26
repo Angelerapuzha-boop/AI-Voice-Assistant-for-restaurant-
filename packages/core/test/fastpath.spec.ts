@@ -2042,6 +2042,31 @@ describe("audit fixes 2026-09-24", () => {
   });
 });
 
+// Drink "no sugar" phrasings should fast-path to Coke No Sugar, not a ~2s LLM
+// turn (India/MB1148 2026-09-26: "Coke no sugar" / "without sugar" hit the brain).
+describe("drink no-sugar phrasings fast-path", () => {
+  const LLM_FB: Llm = {
+    stream() {
+      return (async function* () {
+        yield { type: "text" as const, text: "[LLM]" };
+        yield { type: "stop" as const, reason: "end_turn" as const };
+      })();
+    },
+  };
+  for (const u of ["a coke no sugar", "coke no sugar please", "can I get a coke with no sugar", "a coke without sugar", "a diet coke", "coke zero"]) {
+    it(`"${u}" -> Coke No Sugar, no LLM`, async () => {
+      const agent = new OrderAgent(LLM_FB, agentCtx());
+      await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+      agent.state.lastAssistantText = "Anything else, or a drink?";
+      const turn = await agent.handleTurn(u);
+      expect(turn.fastPath ?? "", u).toBe("drink_added");
+      const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+      const drink = order!.items.find((i) => /soft drink/i.test(i.nameSnapshot));
+      expect(drink?.modifiers.map((m) => m.nameSnapshot), u).toContain("Coke No Sugar");
+    });
+  }
+});
+
 // Large-order read-back (India call MB1150 2026-09-26): a garbled line repeated
 // "pair of chicken kebab" and each was added -> 7 kebabs / $108 confirmed on the
 // total alone. Big orders now read the ITEMS back so it's caught; small orders

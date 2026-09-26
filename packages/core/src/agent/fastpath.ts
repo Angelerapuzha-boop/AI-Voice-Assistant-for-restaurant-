@@ -578,9 +578,36 @@ async function matchDrink(
   const flav = groups.find((g) => /flavou?r/i.test(g.name));
   if (!flav) return null;
   const opts = flav.modifiers.filter((m) => m.isAvailable).map((m) => ({ id: m.id, name: m.name }));
-  const match = matchOptions(flavourWords.join(" "), opts);
-  if (!match || match.ids.length !== 1) return null;
-  const flavourName = opts.find((o) => o.id === match.ids[0])?.name;
+  // "No sugar" synonyms: callers say it many ways ("diet coke", "coke zero",
+  // "coke without sugar", "sugar-free coke"). Normalise the signal word to the
+  // tokens the flavour actually carries ("no"/"sugar") so they resolve to the
+  // "No Sugar" variant instead of a ~2s LLM turn (India/AU 2026-09-26).
+  const NOSUGAR_SIGNALS = new Set(["diet", "zero", "sugarfree", "sugarless", "lite", "light", "without", "sf"]);
+  let fw = flavourWords;
+  if (fw.some((w) => NOSUGAR_SIGNALS.has(w))) {
+    fw = fw.filter((w) => !NOSUGAR_SIGNALS.has(w));
+    for (const need of ["no", "sugar"]) if (!fw.includes(need)) fw.push(need);
+  }
+  const match = matchOptions(fw.join(" "), opts);
+  if (!match || match.ids.length === 0) return null;
+  let flavourId: string;
+  if (match.ids.length === 1) {
+    flavourId = match.ids[0]!;
+  } else {
+    // "coke no sugar" can match BOTH "Coke" and "Coke No Sugar" -> pick the MOST
+    // specific: the option sharing the most words with what was said. Plain "a
+    // coke" (no extra words) still resolves to "Coke" inside matchOptions.
+    const want = new Set(fw.map(singular));
+    const ranked = match.ids
+      .map((id) => ({
+        id,
+        score: contentTokens(opts.find((o) => o.id === id)?.name ?? "").map(singular).filter((t) => want.has(t)).length,
+      }))
+      .sort((a, b) => b.score - a.score);
+    if (ranked[0]!.score === (ranked[1]?.score ?? -1)) return null; // genuine tie -> LLM
+    flavourId = ranked[0]!.id;
+  }
+  const flavourName = opts.find((o) => o.id === flavourId)?.name;
   if (!flavourName) return null;
   return { menuItemName: drink.name, flavourName, quantity };
 }
