@@ -2088,6 +2088,23 @@ describe("drink no-sugar phrasings fast-path", () => {
       expect(drink?.modifiers.map((m) => m.nameSnapshot), u).toContain("Coke No Sugar");
     });
   }
+
+  // MB1154 (live AU call): "Anything else, or a drink?" -> "Mm, no." wrongly
+  // added a Coke, because the word "no" matched the literal "No" in the option
+  // "Coke No Sugar". A decline/affirmation must NEVER add a drink.
+  for (const decline of ["Mm, no", "no", "no thanks", "nah thanks", "no thank you", "nope", "yeah nah"]) {
+    it(`decline "${decline}" to the drink prompt adds no phantom drink`, async () => {
+      const agent = new OrderAgent(LLM_FB, agentCtx());
+      await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+      agent.state.lastAssistantText = "Anything else, or a drink?";
+      await agent.handleTurn(decline);
+      const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+      expect(
+        order!.items.some((i) => /soft drink|coke/i.test(i.nameSnapshot)),
+        `"${decline}" added a phantom drink`,
+      ).toBe(false);
+    });
+  }
 });
 
 // Large-order read-back (India call MB1150 2026-09-26): a garbled line repeated

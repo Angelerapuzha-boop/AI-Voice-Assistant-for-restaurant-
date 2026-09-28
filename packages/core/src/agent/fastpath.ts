@@ -574,6 +574,20 @@ async function matchDrink(
     else flavourWords.push(t);
   }
   if (flavourWords.length === 0) return null;
+  // A bare decline/affirmation answering "…or a drink?" is NOT a drink order —
+  // but the option "Coke NO Sugar" literally contains "no", so a lone "no" would
+  // match it and add a phantom Coke (live call MB1154: "Mm, no" -> Coke No Sugar
+  // silently added). Drop pure answer-words; keep "no"/"not" only as part of a
+  // "no sugar" qualifier (a real flavour word must remain for a match).
+  const ANSWER_WORDS = new Set([
+    "no", "nah", "nope", "not", "none", "na", "naw",
+    "yes", "yeah", "yep", "yup", "nothing", "thanks", "thank", "ta", "cheers",
+  ]);
+  const hasSugar = flavourWords.includes("sugar");
+  const flavourWordsClean = flavourWords.filter(
+    (w) => !ANSWER_WORDS.has(w) || (hasSugar && (w === "no" || w === "not")),
+  );
+  if (flavourWordsClean.length === 0) return null;
   const items = await orderableItems(ctx);
   const drink = items.find((i) =>
     /soft drink/i.test(i.name) && (big ? /1\.?25|litre|liter/i.test(i.name) : /can/i.test(i.name)),
@@ -588,7 +602,7 @@ async function matchDrink(
   // tokens the flavour actually carries ("no"/"sugar") so they resolve to the
   // "No Sugar" variant instead of a ~2s LLM turn (India/AU 2026-09-26).
   const NOSUGAR_SIGNALS = new Set(["diet", "zero", "sugarfree", "sugarless", "lite", "light", "without", "sf"]);
-  let fw = flavourWords;
+  let fw = flavourWordsClean;
   if (fw.some((w) => NOSUGAR_SIGNALS.has(w))) {
     fw = fw.filter((w) => !NOSUGAR_SIGNALS.has(w));
     for (const need of ["no", "sugar"]) if (!fw.includes(need)) fw.push(need);
