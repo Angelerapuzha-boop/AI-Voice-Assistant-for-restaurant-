@@ -901,6 +901,18 @@ function cleanName(text: string): string | null {
   ) {
     return null;
   }
+  // A pronoun-contraction or bare verb a hesitating caller utters ("I've been…",
+  // "I'm…", "we've…") is a sentence fragment, never a name (live prod call
+  // MB1087 read back "for I've Been"). Compared with apostrophes stripped, so
+  // "i've"->"ive". No real first name is any of these.
+  const NAME_FRAGMENTS = new Set([
+    "ive", "im", "id", "ill", "weve", "youve", "hes", "shes", "theyve", "were",
+    "youre", "youd", "youll", "been", "gonna", "wanna", "havent", "hasnt",
+    "cant", "dont", "didnt", "wont", "isnt", "arent", "wasnt",
+  ]);
+  if (words.some((w) => NAME_FRAGMENTS.has(w.toLowerCase().replace(/[^a-z]/g, "")))) {
+    return null;
+  }
   // An all-single-letter "name" ("J", "J J") is almost always a garbled line,
   // not a real name — never read back "for J J" (live India call). Re-ask.
   if (words.every((w) => w.replace(/[^a-zA-Z]/g, "").length <= 1)) return null;

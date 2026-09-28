@@ -854,6 +854,9 @@ describe("fast paths (LLM must not be called)", () => {
       "And...", "and", "another", "new order", "Caller", "placeholder",
       // junk words said instead of a name — saved "Anything" on a live order (MB1152)
       "Anything", "anything", "nothing", "whatever", "something",
+      // sentence fragments a hesitating caller utters — read back "for I've Been"
+      // on live prod call MB1087
+      "I've been", "we've been", "been", "you've",
     ]) {
       const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
       await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
@@ -861,6 +864,21 @@ describe("fast paths (LLM must not be called)", () => {
       const turn = await agent.handleTurn(junk);
       expect(turn.fastPath, junk).toBe("name_reask");
       expect(turn.text.toLowerCase(), junk).not.toMatch(/for (hello|testing)/);
+    }
+  });
+
+  it("real names near the MB1087 fragment guard still capture cleanly", async () => {
+    for (const [said, expected] of [
+      ["Vinay", "Vinay"], ["Will", "Will"], ["Ivy", "Ivy"], ["Ida", "Ida"],
+      ["Ian", "Ian"], ["I'm Vinay", "Vinay"], ["it's Ivo", "Ivo"],
+    ] as [string, string][]) {
+      const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+      await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+      agent.state.lastAssistantText = "Can I get a name for the order?";
+      const turn = await agent.handleTurn(said);
+      expect(turn.fastPath, said).toBe("name_close");
+      const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+      expect(order!.customerName, said).toBe(expected);
     }
   });
 
