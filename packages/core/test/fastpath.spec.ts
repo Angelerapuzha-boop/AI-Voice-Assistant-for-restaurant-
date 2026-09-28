@@ -2042,6 +2042,26 @@ describe("audit fixes 2026-09-24", () => {
   });
 });
 
+// Compound with a hedge word or a drink should stay on the fast path, not take
+// a ~3s LLM turn (live AU call MB1151: "maybe some chips and a coke no sugar").
+describe("compound hedges/drinks fast-path (MB1151)", () => {
+  const LLM_FB2: Llm = {
+    stream() {
+      return (async function* () {
+        yield { type: "text" as const, text: "[LLM]" };
+        yield { type: "stop" as const, reason: "end_turn" as const };
+      })();
+    },
+  };
+  for (const u of ["chips and a coke", "maybe some chips and a coke no sugar", "a coke and some chips"]) {
+    it(`"${u}" stays on the fast path (no LLM)`, async () => {
+      const agent = new OrderAgent(LLM_FB2, agentCtx());
+      const turn = await agent.handleTurn(u);
+      expect(turn.fastPath ?? "", u).toMatch(/compound|item_added|drink_added|item_pending/);
+    });
+  }
+});
+
 // Drink "no sugar" phrasings should fast-path to Coke No Sugar, not a ~2s LLM
 // turn (India/MB1148 2026-09-26: "Coke no sugar" / "without sugar" hit the brain).
 describe("drink no-sugar phrasings fast-path", () => {

@@ -41,6 +41,10 @@ const FILLER_WORDS = new Set([
   // "go"/"on" from casual "go on, a coke" (taking an upsell) and the Aussie
   // opener "I'll go a chicken kebab" — never a menu item or flavour token.
   "go", "gonna", "goin",
+  // hedge words a caller sprinkles in ("MAYBE some chips and MAYBE a coke") —
+  // never a menu item; without stripping, "maybe" left a leftover token that
+  // broke the compound match and sent it to the LLM (live AU call MB1151).
+  "maybe", "perhaps", "possibly",
 ]);
 
 const SCOPE_ALL_WORDS = new Set(["both", "all", "each", "everything"]);

@@ -200,7 +200,7 @@ function nextFiller(): string {
 // sentence that reads as the AI narrating its own actions, keeping the real
 // customer-facing lines. Never strips to nothing (falls back to the original).
 const NARRATION_RE =
-  /\b(i'?ll add|i will add|let me add|i'?ll ask|i'?ll set|i'?ll put (?:it|them)|i'?ll go ahead|i'?m going to|i need to (?:add|set|ask)|adding (?:it|them|the item)|as pending|needs? a base choice|so i'?ll|i'?ll mark|i'?ll note|first,? i|let me (?:start|create|get)(?: (?:that|the order|this|it))?(?: (?:started|going|first|in))?|start(?:ing)? the order|let me (?:just )?(?:pull|check) that up)\b/i;
+  /\b(i'?ll add|i will add|let me add|i'?ll ask|i'?ll set|i'?ll put (?:it|them)|i'?ll go ahead|i'?m going to|i need to (?:add|set|ask)|adding (?:it|them|the item)|as pending|needs? a base choice|so i'?ll|i'?ll mark|i'?ll note|first,? i|let me (?:start|create|get)(?: (?:that|the order|this|it))?(?: (?:started|going|first|in))?|start(?:ing)? the order|let me (?:just )?(?:pull|check) that up|now i'?ll confirm|i'?ll confirm (?:it|that|the order)|let me confirm)\b/i;
 export function stripPlanNarration(text: string): string {
   const parts = text.split(/(?<=[.?!])\s+/).filter((p) => p.trim());
   if (parts.length < 2) return text; // single sentence -> nothing to strip safely
