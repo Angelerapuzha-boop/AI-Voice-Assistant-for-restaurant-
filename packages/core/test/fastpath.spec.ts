@@ -2105,6 +2105,23 @@ describe("drink no-sugar phrasings fast-path", () => {
       ).toBe(false);
     });
   }
+
+  it("isFinished understands filler-prefixed declines (MB1154)", () => {
+    for (const u of ["Mm, no", "hmm nah", "er, no thanks", "mm that's all", "mmm no"]) {
+      expect(isFinished(u), u).toBe(true);
+    }
+  });
+
+  it('a filler-prefixed "Mm, no" closes the order instead of falling through (MB1154)', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }], "Dave");
+    agent.state.mutationSeq = 1;
+    agent.state.summarySeq = 1;
+    agent.state.lastAssistantText = "Anything else, or a drink?";
+    const turn = await agent.handleTurn("Mm, no");
+    expect(turn.fastPath).toBe("close");
+    expect(turn.text.toLowerCase()).toMatch(/sound good|correct/);
+  });
 });
 
 // Large-order read-back (India call MB1150 2026-09-26): a garbled line repeated

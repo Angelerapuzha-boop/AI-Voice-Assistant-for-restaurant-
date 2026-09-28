@@ -95,7 +95,7 @@ export function isFinished(text: string): boolean {
   if (FINISH_PHRASES.has(t)) return true;
   // A leading acknowledgement in front of a finish phrase — STT very often
   // prepends "nah"/"no" ("nah that's the lot", "no that's the lot").
-  const lead = t.replace(/^(?:nah|no|nope|yeah|yep|yup|um|uh|ah|oh|so|well|ok|okay)\s+/, "");
+  const lead = t.replace(/^(?:nah|no|nope|yeah|yep|yup|um|uh|ah|oh|er|erm|mm+|hmm+|mhm|so|well|ok|okay)\s+/, "");
   if (lead !== t && FINISH_PHRASES.has(lead)) return true;
   // A trailing "no"/"nah" or politeness tacked on ("it's okay no", "that's it
   // no", "im good thanks") — strip it and re-check.
