@@ -457,6 +457,33 @@ describe("overlapped / unintelligible input -> instant 'sorry, say that again?'"
     agent.state.afterBarge = true;
     expect((await agent.handleTurn("frooble three")).fastPath).toBeUndefined(); // cap -> AI
   });
+
+  it("apologises only on the FIRST re-ask, not every time (Kevin 2026-09-28)", async () => {
+    const agent = new OrderAgent(scripted(), agentCtx());
+    agent.state.afterBarge = true;
+    const t1 = await agent.handleTurn("blarg one");
+    expect(t1.fastPath).toBe("garbled_reask");
+    expect(t1.text.toLowerCase(), "first miss should apologise").toContain("sorry");
+    agent.state.afterBarge = true;
+    const t2 = await agent.handleTurn("wozzle two");
+    expect(t2.fastPath).toBe("garbled_reask");
+    expect(t2.text.toLowerCase(), "second miss should NOT repeat sorry").not.toContain("sorry");
+    expect(t2.text.toLowerCase(), "but still re-asks").toContain("say that again");
+  });
+
+  it("name re-ask apologises once, then just asks the question (Kevin 2026-09-28)", async () => {
+    const agent = new OrderAgent(scripted(), agentCtx());
+    await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+    agent.state.lastAssistantText = "Can I get a name for the order?";
+    const t1 = await agent.handleTurn("yes"); // not a name -> re-ask
+    expect(t1.fastPath).toBe("name_reask");
+    expect(t1.text.toLowerCase()).toContain("sorry");
+    agent.state.lastAssistantText = "Sorry — can I get a name for the order?";
+    const t2 = await agent.handleTurn("yeah"); // still not a name -> re-ask
+    expect(t2.fastPath).toBe("name_reask");
+    expect(t2.text.toLowerCase(), "no repeated sorry").not.toContain("sorry");
+    expect(t2.text.toLowerCase(), "still asks for the name").toContain("name for the order");
+  });
 });
 
 describe("EXHAUSTIVE name capture (every natural way a caller gives a name)", () => {

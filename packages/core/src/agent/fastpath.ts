@@ -1218,6 +1218,16 @@ async function tryCompoundOrder(
 }
 
 /**
+ * Apologise only on the FIRST re-ask of a run — Kevin (2026-09-28): "if not
+ * heard properly, say sorry and repeat; but don't ALWAYS say sorry — ask them
+ * correctly and take the order." After the first miss, drop the apology and just
+ * re-ask the specific question (the question itself is what moves the order on).
+ */
+function reaskLead(count: number): string {
+  return count === 0 ? "Sorry, " : "";
+}
+
+/**
  * Kevin's rule (2026-09-22): when the caller talked OVER the assistant (an
  * overlap) and the resulting words couldn't be placed, say sorry and ask them to
  * repeat, instantly — rather than guessing on a garbled overlap or lagging on the
@@ -1230,10 +1240,15 @@ function garbledReask(
   calls: ToolCallRecord[],
 ): FastPathResult | null {
   if (wasBarge && (state.garbledReaskCount ?? 0) < 2) {
+    const first = (state.garbledReaskCount ?? 0) === 0;
     state.garbledReaskCount = (state.garbledReaskCount ?? 0) + 1;
     return {
       handled: true,
-      say: "Sorry, I didn't catch that — could you say that again?",
+      // First miss apologises; a second in a row just asks again (no repeated
+      // "sorry" — Kevin 2026-09-28).
+      say: first
+        ? "Sorry, I didn't catch that — could you say that again?"
+        : "Could you say that again?",
       toolCalls: calls,
       kind: "garbled_reask",
     };
@@ -1494,8 +1509,17 @@ export async function tryFastPath(
       // Cap the re-ask: a garbled line that keeps sending "J"/"J J" must not
       // loop forever — hand to the LLM, which can rephrase or accept a spelling.
       if ((state.nameReaskCount ?? 0) >= 2) return NOT_HANDLED;
+      const firstNameReask = (state.nameReaskCount ?? 0) === 0;
       state.nameReaskCount = (state.nameReaskCount ?? 0) + 1;
-      return { handled: true, say: "Sorry — can I get a name for the order?", toolCalls: calls, kind: "name_reask" };
+      return {
+        handled: true,
+        // Apologise once; on a repeat just ask again (no double "sorry").
+        say: firstNameReask
+          ? "Sorry — can I get a name for the order?"
+          : "Can I get a name for the order?",
+        toolCalls: calls,
+        kind: "name_reask",
+      };
     }
     return NOT_HANDLED;
   }
@@ -1968,10 +1992,11 @@ export async function tryFastPath(
       // required question, re-ask it instantly (no ~2s LLM turn); cap the
       // instant re-asks so a stuck caller still reaches the LLM.
       if (isUnclearOptionAnswer(text) && (state.optionReaskCount ?? 0) < 2) {
+        const lead = reaskLead(state.optionReaskCount ?? 0);
         state.optionReaskCount = (state.optionReaskCount ?? 0) + 1;
         return {
           handled: true,
-          say: `Sorry, ${groupQuestion(
+          say: `${lead}${groupQuestion(
             target.name,
             target.modifiers.filter((m) => m.isAvailable).map((m) => m.name),
           )}`,
@@ -2010,10 +2035,11 @@ export async function tryFastPath(
       // Unclear answer to a still-missing required question -> re-ask it
       // instantly rather than a ~2s LLM turn (garbled line). Capped.
       if (missing.length > 0 && isUnclearOptionAnswer(text) && (state.optionReaskCount ?? 0) < 2) {
+        const lead = reaskLead(state.optionReaskCount ?? 0);
         state.optionReaskCount = (state.optionReaskCount ?? 0) + 1;
         return {
           handled: true,
-          say: `Sorry, ${groupQuestion(targets[0]!.groupName, targets[0]!.options.map((o) => o.name))}`,
+          say: `${lead}${groupQuestion(targets[0]!.groupName, targets[0]!.options.map((o) => o.name))}`,
           toolCalls: calls,
           kind: "option_reask",
         };
