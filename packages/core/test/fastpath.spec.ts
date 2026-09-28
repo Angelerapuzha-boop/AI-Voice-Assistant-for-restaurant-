@@ -824,6 +824,8 @@ describe("fast paths (LLM must not be called)", () => {
       "J", "J J", "J. J.",
       // placeholder/connector junk read back as names on live AU calls (MB1135-7)
       "And...", "and", "another", "new order", "Caller", "placeholder",
+      // junk words said instead of a name — saved "Anything" on a live order (MB1152)
+      "Anything", "anything", "nothing", "whatever", "something",
     ]) {
       const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
       await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);

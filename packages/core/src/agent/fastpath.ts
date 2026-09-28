@@ -807,7 +807,7 @@ function realName(order: OrderWithItems): string {
   // "Caller", "placeholder") or a connector captured off a hesitation ("And")
   // count as NO name — ask for a real one rather than reading it back (live AU
   // calls MB1129/1135/1136/1137: "for Caller", "for placeholder", "for And").
-  return /^(unknown|customer|the customer|a customer|guest|caller|the caller|placeholder|pending|pending order|tbd|none|no name|na|n\/a|hello|testing|test|and|another|new|new order|order)$/i.test(n)
+  return /^(unknown|customer|the customer|a customer|guest|caller|the caller|placeholder|pending|pending order|tbd|none|no name|na|n\/a|hello|testing|test|and|another|new|new order|order|anything|anything else|nothing|something|whatever|everything|anyone|someone|dunno|doesn'?t matter|don'?t mind)$/i.test(n)
     ? ""
     : n;
 }
@@ -893,6 +893,9 @@ const NON_NAME_WORDS = new Set([
   // Testing Hello"). Re-ask instead of capturing these.
   "hello", "hi", "hey", "heya", "hiya", "hows", "testing", "test", "customer",
   "guest", "caller", "placeholder", "pending", "tbd", "hear", "you", "your", "sorry", "what", "who",
+  // junk words a caller says INSTEAD of a name ("anything", "whatever") — never a
+  // real name; capturing them put "Anything" on a live order (call MB1152).
+  "anything", "nothing", "something", "whatever", "everything", "anyone", "someone", "dunno",
   // connectors/leads a caller trails off on, captured off a hesitation as a
   // "name" on live AU calls ("for And") — never a name.
   "and", "or", "another", "new", "order", "some", "the", "a", "an",

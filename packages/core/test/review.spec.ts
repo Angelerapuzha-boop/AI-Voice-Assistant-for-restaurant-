@@ -235,7 +235,7 @@ describe("placeholder customer names are dropped (never spoken as the name)", ()
     callerNumber: PHONE,
     now: () => KITCHEN_OPEN,
   });
-  for (const bad of ["pending", "customer", "takeaway", "placeholder", "guest", "PENDING"]) {
+  for (const bad of ["pending", "customer", "takeaway", "placeholder", "guest", "PENDING", "anything", "nothing", "whatever"]) {
     it(`create_order_draft drops "${bad}"`, async () => {
       const state = initialAgentState();
       const r = await executeTool(toolCtx(), state, "create_order_draft", {

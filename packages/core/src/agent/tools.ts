@@ -56,6 +56,9 @@ const NON_NAME_VALUES = new Set([
   "no name", "hello", "hi", "hey", "testing", "test",
   "caller", "the caller", "placeholder", "and", "another", "new",
   "new order", "pending", "pending order", "tbd", "n/a", "na",
+  // junk words said instead of a name (call MB1152 saved "Anything" as the name)
+  "anything", "anything else", "nothing", "something", "whatever", "everything",
+  "anyone", "someone", "dunno",
 ]);
 
 /** A caller name the LLM passed, or undefined if it's a placeholder/non-name. */
