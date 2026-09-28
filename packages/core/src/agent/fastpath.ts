@@ -50,7 +50,8 @@ const FILLER_WORDS = new Set([
 const SCOPE_ALL_WORDS = new Set(["both", "all", "each", "everything"]);
 
 export { isFinished, isYes, normalise, WAIT_REGEX } from "./speech";
-import { isFinished, isMenuRequest, isOptionsQuery, isSelectAll, isYes, normalise, WAIT_REGEX } from "./speech";
+import { isFinished, isMenuRequest, isOptionsQuery, isSelectAll, isSpecialsRequest, isYes, normalise, WAIT_REGEX } from "./speech";
+import { getActiveSpecials } from "../domain/specials";
 
 /** A "yes" that ALSO carries an addition or change ("yeah, and a coke", "yes
  * but make it lamb", "yep also grab chips") — used to STOP the confirm fast
@@ -722,6 +723,24 @@ async function menuSummary(ctx: AgentContext): Promise<string> {
 }
 
 /**
+ * Answer "what are today's specials?" INSTANTLY from the daily_specials table
+ * (the same source get_daily_specials reads) instead of a ~5s LLM+tool turn.
+ * States them plainly and truthfully — never invents one; "No specials on
+ * today." when there are none (matches the tool's guidance). Ordering a special
+ * afterwards still falls to the LLM (order_special), which is correct.
+ */
+async function answerSpecials(ctx: AgentContext): Promise<string> {
+  const specials = await getActiveSpecials(ctx.db, ctx.restaurant.id, ctx.now());
+  if (specials.length === 0) return "No specials on today.";
+  const parts = specials.map((s) => `the ${s.name} for ${speakCents(s.priceCents)}`);
+  const list =
+    parts.length === 1
+      ? parts[0]!
+      : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `Today we've got ${list}.`;
+}
+
+/**
  * Total-only close (owner rule: no item recital — state the grand total once
  * with the name and type, confirm once). "That's 42 dollars 80, takeaway for
  * Sam. Confirm?"
@@ -1262,6 +1281,28 @@ export async function tryFastPath(
   ) {
     state.repeatOffered = false; // a menu ask moves past the "same as last time?" offer
     return { handled: true, say: await menuSummary(ctx), toolCalls: calls, kind: "menu" };
+  }
+
+  // ---- caller asks about today's specials/deals ("any specials today?", "what
+  // deals do you have?"). The answer is deterministic (daily_specials table),
+  // so answer INSTANTLY and RESUME whatever stage we interrupted, instead of a
+  // ~5s LLM+tool turn (live call MB1152: "what specials do you have today?" =
+  // 5.7s, asked mid name-capture). Committed transcript only (never a probe).
+  if (!opts.probe && isSpecialsRequest(text)) {
+    const said = await answerSpecials(ctx);
+    if (atConfirmStage(state) && state.draftOrderId) {
+      const order = await getOrderWithItems(ctx.db, state.draftOrderId);
+      if (order && order.items.length > 0) {
+        return { handled: true, say: `${said} ${spokenClose(order)}`, toolCalls: calls, kind: "specials" };
+      }
+    }
+    if (atNameStage(state)) {
+      return { handled: true, say: `${said} What's the name for the order?`, toolCalls: calls, kind: "specials" };
+    }
+    if (state.draftOrderId) {
+      return { handled: true, say: `${said} ${await anythingElse(ctx, state)}`, toolCalls: calls, kind: "specials" };
+    }
+    return { handled: true, say: `${said} What can I get you?`, toolCalls: calls, kind: "specials" };
   }
 
   // ---- returning caller answering the proactive "Same as last time?" greeting.

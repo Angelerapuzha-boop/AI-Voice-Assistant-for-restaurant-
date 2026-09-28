@@ -3,6 +3,7 @@ import type pg from "pg";
 import { OrderAgent } from "../src/agent/engine";
 import type { AgentContext } from "../src/agent/tools";
 import { isFinished, isYes, spokenClose, terseReadback } from "../src/agent/fastpath";
+import { isSpecialsRequest } from "../src/agent/speech";
 import { addOrderItem, createDraft, getOrderWithItems } from "../src/domain/orders";
 import type { Llm } from "../src/agent/llm";
 import {
@@ -2169,5 +2170,70 @@ describe("LLM-lag reduction 2026-09-25", () => {
     const turn = await agent.handleTurn("a chicken meatbox");
     expect(turn.fastPath).toBe("item_pending");
     expect(turn.text.toLowerCase()).toMatch(/chips|rice|salad/);
+  });
+});
+
+// SPECIALS FAST-PATH (MB1152) — "what specials/deals today?" is answered from
+// the daily_specials table instantly and RESUMES the interrupted stage, instead
+// of a ~5s LLM+tool turn (the live MB1152 call: 5.7s, asked mid name-capture).
+describe("specials fast-path (MB1152)", () => {
+  // Insert a special with a window CONTAINING the frozen agentCtx now
+  // (2026-09-09T19:00+08), assert on it, then remove it — deterministic
+  // regardless of the seed special's borderline window or other tests.
+  async function withTestSpecial<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    const day = new Date("2026-09-09T19:00:00+08:00").getTime();
+    await db.query(
+      `INSERT INTO daily_specials (restaurant_id, name, description, price_cents, starts_at, ends_at)
+       VALUES ($1, $2, 'test special', 1400, $3, $4)`,
+      [ctx.restaurant.id, name, new Date(day - 86_400_000), new Date(day + 86_400_000)],
+    );
+    try {
+      return await fn();
+    } finally {
+      await db.query(`DELETE FROM daily_specials WHERE name = $1`, [name]);
+    }
+  }
+
+  it("recites the active special at name stage without the LLM, then re-asks the name", async () => {
+    await withTestSpecial("MB Name-Stage Deal", async () => {
+      const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+      await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+      agent.state.lastAssistantText = "Can I get a name for the order?";
+      const turn = await agent.handleTurn("what specials do you have today?");
+      expect(turn.fastPath).toBe("specials");
+      expect(turn.text).toContain("MB Name-Stage Deal");
+      expect(turn.text.toLowerCase()).toContain("name for the order");
+    });
+  });
+
+  it("says 'no specials on today' when none are active, and resumes anything-else", async () => {
+    // A now well outside any seed window -> getActiveSpecials returns nothing.
+    const noneCtx = { ...agentCtx(), now: () => new Date("2027-06-01T19:00:00+08:00") };
+    const agent = new OrderAgent(FORBIDDEN_LLM, noneCtx);
+    await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+    agent.state.lastAssistantText = "Anything else?";
+    const turn = await agent.handleTurn("any specials on today?");
+    expect(turn.fastPath).toBe("specials");
+    expect(turn.text.toLowerCase()).toContain("no specials on today");
+    expect(turn.text.toLowerCase()).toMatch(/anything else/);
+  });
+
+  it("at the start (no order) answers specials then invites the order", async () => {
+    await withTestSpecial("MB Start Deal", async () => {
+      const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+      const turn = await agent.handleTurn("what deals do you have?");
+      expect(turn.fastPath).toBe("specials");
+      expect(turn.text).toContain("MB Start Deal");
+      expect(turn.text.toLowerCase()).toMatch(/what can i get/);
+    });
+  });
+
+  it("does not mistake 'special sauce' or 'special instructions' for a specials query", () => {
+    expect(isSpecialsRequest("can I get the special sauce")).toBe(false);
+    expect(isSpecialsRequest("no special instructions")).toBe(false);
+    expect(isSpecialsRequest("what specials do you have today")).toBe(true);
+    expect(isSpecialsRequest("any deals on")).toBe(true);
+    expect(isSpecialsRequest("whats on special")).toBe(true);
+    expect(isSpecialsRequest("specials?")).toBe(true);
   });
 });

@@ -134,6 +134,33 @@ export function isMenuRequest(text: string): boolean {
   return false;
 }
 
+// The caller is asking about today's SPECIALS / deals / offers ("any specials
+// today?", "what deals do you have?", "what's on special?"). Answered instantly
+// from the daily_specials table instead of a ~5s LLM+tool turn (live call
+// MB1152: "what specials do you have today?" took 5.7s). Kept specific so a
+// normal order never matches — "special sauce"/"special instructions" excluded,
+// and a specials/deal/offer word must appear in a question-ish context.
+export function isSpecialsRequest(text: string): boolean {
+  const t = normalise(text);
+  if (!t) return false;
+  // "special sauce", "special instructions/request" are order content, not a query.
+  if (/\bspecial (?:sauce|instruction|instructions|request|requests)\b/.test(t)) return false;
+  if (!/\b(specials?|deals?|offers?|promotions?|promos?)\b/.test(t)) return false;
+  // Bare "specials?" / "todays deals" / "any offers today" — the word standing
+  // on its own as the whole ask.
+  if (/^(?:the |todays? |today'?s )?(?:specials?|deals?|offers?|promotions?|promos?)(?: today| on| running| available)?\??$/.test(t)) {
+    return true;
+  }
+  // "what's on special", "anything on special today".
+  if (/\bon special\b/.test(t)) return true;
+  // The special/deal word asked in a genuine INTERROGATIVE context — so an ORDER
+  // that merely names a deal ("I'll grab the meal deal", "can I get the lunch
+  // deal") is NOT mistaken for a specials query and swallowed.
+  return /\b(any|what|whats|which|got any|have any|you got|you have|do you|hows? the|anything)\b/.test(
+    t,
+  );
+}
+
 // "all of them", "everything", "the lot" — the caller wants EVERY option in
 // the group being asked about. A single word ("all") is enough in context.
 const SELECT_ALL_PHRASES = new Set([

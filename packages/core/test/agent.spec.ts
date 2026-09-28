@@ -130,13 +130,17 @@ describe("agent engine + tools", () => {
     await db.query(`UPDATE menu_items SET is_sold_out = false WHERE id = $1`, [item.id]);
   });
 
+  // NB: a direct "what's today's special?" is now answered by the deterministic
+  // fast-path (see fastpath.spec "specials fast-path"), so these tool-contract
+  // tests use an open recommendation ask that falls through to the LLM, which is
+  // what still calls get_daily_specials (e.g. when ordering/recommending).
   it("returns real specials and never invents them (scenario 4)", async () => {
     const llm = new FakeLlm([
       toolTurn("get_daily_specials", {}, "tu_1"),
       textTurn("Today's special is the Half Chicken & Chips Deal for nineteen ninety-five."),
     ]);
     const agent = new OrderAgent(llm, agentCtx());
-    const turn = await agent.handleTurn("what's today's special?");
+    const turn = await agent.handleTurn("what would you recommend today?");
     const specials = turn.toolCalls[0]!.result.specials as { name: string; price: string }[];
     expect(specials[0]!.name).toBe("Half Chicken & Chips Deal");
     expect(specials[0]!.price).toBe("$19.95");
@@ -144,15 +148,18 @@ describe("agent engine + tools", () => {
 
   it("tells the model when there are no specials", async () => {
     await db.query(`UPDATE daily_specials SET active = false`);
-    const llm = new FakeLlm([
-      toolTurn("get_daily_specials", {}, "tu_1"),
-      textTurn("No special today, but the mixed grill is popular."),
-    ]);
-    const agent = new OrderAgent(llm, agentCtx());
-    const turn = await agent.handleTurn("specials?");
-    expect(turn.toolCalls[0]!.result.specials).toEqual([]);
-    expect(String(turn.toolCalls[0]!.result.note)).toMatch(/never invent/i);
-    await db.query(`UPDATE daily_specials SET active = true`);
+    try {
+      const llm = new FakeLlm([
+        toolTurn("get_daily_specials", {}, "tu_1"),
+        textTurn("No special today, but the mixed grill is popular."),
+      ]);
+      const agent = new OrderAgent(llm, agentCtx());
+      const turn = await agent.handleTurn("anything you'd suggest?");
+      expect(turn.toolCalls[0]!.result.specials).toEqual([]);
+      expect(String(turn.toolCalls[0]!.result.note)).toMatch(/never invent/i);
+    } finally {
+      await db.query(`UPDATE daily_specials SET active = true`);
+    }
   });
 
   it("search returns multiple matches for ambiguous requests (scenario 11)", async () => {
