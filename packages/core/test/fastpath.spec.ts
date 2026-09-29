@@ -1518,6 +1518,25 @@ describe("natural-speech fast paths (Kevin 2026-09-18)", () => {
     expect(agent.state.pendingFamily).toBeFalsy();
   });
 
+  // Live call 593a9122: mid meatbox meat-clarify the caller switched to a
+  // chicken KEBAB, but the bot added a Chicken Meatbox and asked the meatbox
+  // base ("chips and salad, or rice and salad?"). A type change must switch to
+  // the new item and ask ITS question.
+  it('changing item type mid-clarify: meatbox -> "chicken kebab" switches item and asks the kebab question', async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    agent.state.lastAssistantText = "Hi, Welcome to Meat Box, what can I get you?";
+    const clarify = await agent.handleTurn("can I get a meatbox");
+    expect(clarify.fastPath).toBe("item_clarify");
+    expect(agent.state.pendingFamily).toBeTruthy();
+    const res = await agent.handleTurn("no actually make that a chicken kebab");
+    expect(["item_added", "item_pending"], res.fastPath).toContain(res.fastPath);
+    const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+    expect(order!.items.some((i) => i.nameSnapshot === "Chicken Kebab"), "chicken kebab added").toBe(true);
+    expect(order!.items.some((i) => /meatbox/i.test(i.nameSnapshot)), "no meatbox left").toBe(false);
+    expect(res.text.toLowerCase(), "must not ask the meatbox base").not.toMatch(/chips and salad, or rice/);
+    expect(agent.state.pendingFamily).toBeFalsy();
+  });
+
   it('adds a drink right after a "say that again?" re-ask (no LLM, not dropped)', async () => {
     const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
     await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);

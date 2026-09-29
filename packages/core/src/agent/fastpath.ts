@@ -1445,7 +1445,22 @@ export async function tryFastPath(
   // which -> "falafel"): resolve to the specific item and add it, no LLM.
   if (!opts.probe && state.pendingFamily && !atConfirmStage(state) && !atNameStage(state)) {
     const family = state.pendingFamily;
-    const target = resolveFamilyAnswer(text, family);
+    // Did the caller name a DIFFERENT item TYPE instead of answering the clarify?
+    // ("...which meatbox?" -> "actually a chicken kebab"). That's a CHANGE, not an
+    // answer — resolveFamilyAnswer would wrongly match just the meat word
+    // ("chicken" -> Chicken Meatbox) and ask the meatbox's base question (live
+    // call 593a9122). Detect a type word that differs from the pending family and
+    // switch to the new item so we ask ITS question.
+    const OTHER_TYPE_WORDS = [
+      "kebab", "burger", "pizza", "meatbox", "meat box", "roll", "wrap", "gozleme",
+      "manakish", "manoush", "pide", "fish", "shank", "ribs", "platter", "souvlaki",
+    ];
+    const answerNorm = normalise(text);
+    const pendingFam = normalise(family.familyWord).replace(/\s+/g, "");
+    const changedType = OTHER_TYPE_WORDS.some(
+      (w) => answerNorm.includes(w) && w.replace(/\s+/g, "") !== pendingFam,
+    );
+    const target = changedType ? null : resolveFamilyAnswer(text, family);
     if (target) {
       state.pendingFamily = null;
       if (!ctx.settings.acceptingOrders) return NOT_HANDLED;
@@ -1460,8 +1475,35 @@ export async function tryFastPath(
       if (!result.error) return { handled: true, say: await anythingElse(ctx, state), toolCalls: calls, kind: "item_added" };
       return NOT_HANDLED;
     }
-    // Unresolved — drop the pending family and let the LLM handle it fresh.
     state.pendingFamily = null;
+    // Item-type change: add the NEW item straight away so its own question is
+    // asked (kebab salads, not meatbox base) — no clunky LLM "hang on" recovery.
+    if (changedType) {
+      // Strip the correction lead-in ("no, actually can you make that a …") so
+      // matchMenuItem sees just the item ("chicken kebab").
+      const cleaned =
+        text
+          .replace(
+            /^(?:\s*(?:no|nah|nope|yeah|yep|yup|um|uh|ah|oh|so|well|actually|sorry|wait|ok|okay|can\s+(?:you|ya|we)|could\s+(?:you|ya)|make\s+(?:it|that)(?:\s+a)?|change\s+(?:it|that)(?:\s+to)?|turn\s+(?:it|that)\s+into|i\s+mean|instead)[,\s]+)+/i,
+            "",
+          )
+          .trim() || text;
+      const items = await orderableItems(ctx);
+      const m = matchMenuItem(cleaned, items.map((i) => ({ name: i.name, aliases: i.aliases })));
+      if (m && !ctx.settings.acceptingOrders) return NOT_HANDLED;
+      if (m) {
+        if (!state.draftOrderId) {
+          const draft = await run("create_order_draft", { orderType: "takeaway" });
+          if (draft.error) return NOT_HANDLED;
+        }
+        const result = await run("add_order_item", { menuItemName: m.menuItemName, quantity: m.quantity });
+        if (result.itemSavedAsPending && typeof result.ask === "string") {
+          return { handled: true, say: result.ask, toolCalls: calls, kind: "item_pending" };
+        }
+        if (!result.error) return { handled: true, say: await anythingElse(ctx, state), toolCalls: calls, kind: "item_added" };
+      }
+    }
+    // Unresolved — let the LLM handle it fresh.
     return NOT_HANDLED;
   }
 
