@@ -882,6 +882,38 @@ describe("fast paths (LLM must not be called)", () => {
     }
   });
 
+  // Kevin 2026-09-29: when the name was captured amid confusion (a re-ask), spell
+  // it back and confirm; a clean first-try name stays fast (no spelling).
+  it("spells the name back after a re-ask, so an unclear name is confirmed", async () => {
+    const scripted: Llm = {
+      stream() {
+        return (async function* () {
+          yield { type: "text" as const, text: "[llm]" };
+          yield { type: "stop" as const, reason: "end_turn" as const };
+        })();
+      },
+    };
+    const agent = new OrderAgent(scripted, agentCtx());
+    await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+    agent.state.lastAssistantText = "Can I get a name for the order?";
+    const r1 = await agent.handleTurn("um"); // not a name -> re-ask (confusion)
+    expect(r1.fastPath).toBe("name_reask");
+    const r2 = await agent.handleTurn("Raju"); // real name after confusion -> spell
+    expect(r2.fastPath).toBe("name_close");
+    expect(r2.text).toContain("R. A. J. U");
+    expect(r2.text.toLowerCase()).toContain("for raju");
+  });
+
+  it("does NOT spell a clean first-try name (stays fast)", async () => {
+    const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
+    agent.state.lastAssistantText = "Can I get a name for the order?";
+    const turn = await agent.handleTurn("Raju"); // uncommon but clear, no confusion
+    expect(turn.fastPath).toBe("name_close");
+    expect(turn.text).not.toContain("R. A. J. U");
+    expect(turn.text.toLowerCase()).toContain("for raju");
+  });
+
   it("name re-ask is capped — a garbled 'J J J' line falls to the LLM, never loops (MB1134)", async () => {
     const scripted: Llm = {
       stream() {

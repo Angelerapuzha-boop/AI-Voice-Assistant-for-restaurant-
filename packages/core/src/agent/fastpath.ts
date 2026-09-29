@@ -767,17 +767,18 @@ function pluralizeItem(name: string): string {
   return /(x|ch|sh)$/.test(n) ? `${n}es` : `${n}s`;
 }
 
-export function spokenClose(order: OrderWithItems): string {
+export function spokenClose(order: OrderWithItems, forceSpellName = false): string {
   const type = order.orderType === "dine_in" ? "dine-in" : "takeaway";
   const name = realName(order);
-  // Spell the name back ONLY when it looks garbled / likely mis-heard — NOT on
+  // Spell the name back when it looks garbled / likely mis-heard — but NOT on
   // every call (Kevin 2026-09-24: "if the name's misspelled only repeat as
-  // alphabets, don't do it in all calls"). A normal-looking name (common or not)
-  // just confirms fast; a dubious one (no vowels, too short, repeated letters)
-  // gets spelled so it's caught. "Sound good?" stays the ender atConfirmStage
-  // matches.
+  // alphabets, don't do it in all calls"). A normal-looking name just confirms
+  // fast; a dubious one (no vowels, too short, repeated letters) gets spelled.
+  // ALSO spell whenever the name was captured amid confusion (a re-ask happened)
+  // — forceSpellName — so an uncertain name like "Raju" is read back letter by
+  // letter and confirmed, not silently folded into the total (Kevin 2026-09-29).
   const first = name.split(/\s+/)[0]?.toLowerCase() ?? "";
-  const spell = name && !COMMON_NAMES.has(first) && looksMisheard(first);
+  const spell = Boolean(name) && (forceSpellName || (!COMMON_NAMES.has(first) && looksMisheard(first)));
   const spelled = spell ? `, that's ${spellName(name)}` : "";
   // LARGE ORDER -> read the ITEMS back, not just the total, so an inflated or
   // mis-heard order is caught before it's locked. On a garbled line a caller can
@@ -1510,8 +1511,12 @@ export async function tryFastPath(
       // confirm?" (live call MB1113). Hand back to the LLM to sort the order out.
       if (!order || order.items.length === 0) return NOT_HANDLED;
       state.summarySeq = state.mutationSeq;
-      state.nameReaskCount = 0; // captured cleanly — clear the streak
-      return { handled: true, say: spokenClose(order), toolCalls: calls, kind: "name_close" };
+      // If the caller had to be re-asked for the name (any confusion), spell it
+      // back and confirm — "for Raju, that's R. A. J. U. Sound good?" (Kevin
+      // 2026-09-29). A clean first-try name confirms fast, no spelling.
+      const nameWasConfused = (state.nameReaskCount ?? 0) > 0;
+      state.nameReaskCount = 0; // captured — clear the streak
+      return { handled: true, say: spokenClose(order, nameWasConfused), toolCalls: calls, kind: "name_close" };
     }
     // Not a name. A plain yes/no/finish or short noise ("yes" to "what name?")
     // -> re-ask INSTANTLY instead of a ~1s brain turn. Compound/content-bearing
