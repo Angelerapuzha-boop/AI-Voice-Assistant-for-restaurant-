@@ -117,6 +117,38 @@ bridgeSweep.unref();
 
 // ------------------------------------------------------------ Twilio webhooks
 
+// Callers whose INBOUND calls we record — TEST numbers only (they consent to
+// their own test calls, so no third-party-consent issue). Real customers are
+// NEVER recorded here. Kevin 2026-09-29: record the +61455500003 test handset.
+const RECORD_INBOUND_CALLERS = new Set(
+  (process.env.RECORD_INBOUND_CALLERS ??
+    // Kevin's own test handsets (they consent). The robot number +15550000005
+    // is excluded — its outbound leg already self-records, so listing it would
+    // double-record.
+    "+61455500003,+61455500001,+61455500002")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+/** Start a dual-channel recording on an in-progress call via the Twilio REST
+ * API. Fire-and-forget from the voice webhook (the call is already answered).
+ * Used only for whitelisted TEST callers. */
+async function startCallRecording(callSid: string): Promise<void> {
+  if (!callSid || !env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) return;
+  const auth =
+    "Basic " + Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString("base64");
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Calls/${callSid}/Recordings.json`,
+    {
+      method: "POST",
+      headers: { Authorization: auth, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ RecordingChannels: "dual", RecordingTrack: "both" }),
+    },
+  );
+  if (!res.ok) throw new Error(`recording start ${res.status}: ${await res.text()}`);
+}
+
 app.post("/twilio/voice", async (req, reply) => {
   const params = (req.body ?? {}) as Record<string, string>;
   if (env.TWILIO_AUTH_TOKEN) {
@@ -160,6 +192,14 @@ app.post("/twilio/voice", async (req, reply) => {
       env.TEST_CLOUD_WSS || "https://bouquet-beast-contain-exposed.trycloudflare.com";
     const toCloud = TEST_CLOUD_CALLERS.has(params.From ?? "");
     const wssBase = toCloud ? TEST_CLOUD_WSS : env.VOICE_PUBLIC_URL;
+    // Record TEST callers' own calls (consented) so Kevin has audio — started
+    // here on the parent call, so it captures the audio whether it streams to
+    // prod or the box. Fire-and-forget; never blocks the TwiML. Never real customers.
+    if (RECORD_INBOUND_CALLERS.has(params.From ?? "")) {
+      startCallRecording(callSid).catch((err) =>
+        req.log.warn({ err: String(err), callSid }, "failed to start inbound test recording"),
+      );
+    }
     req.log.info(
       { callSid, routedTo: toCloud ? "cloud-test" : "sydney" },
       "routing call to custom media-stream pipeline",
