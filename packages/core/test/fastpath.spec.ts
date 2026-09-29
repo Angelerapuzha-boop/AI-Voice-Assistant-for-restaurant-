@@ -862,9 +862,40 @@ describe("fast paths (LLM must not be called)", () => {
       await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
       agent.state.lastAssistantText = "Can I get a name for the order?";
       const turn = await agent.handleTurn(junk);
-      expect(turn.fastPath, junk).toBe("name_reask");
-      expect(turn.text.toLowerCase(), junk).not.toMatch(/for (hello|testing)/);
+      // Never captured as the name — handled either by a name re-ask or, for a
+      // pure hesitation ("Um…"), the warm hesitation prompt. Both are safe.
+      expect(["name_reask", "hesitation"], junk).toContain(turn.fastPath);
+      expect(turn.text.toLowerCase(), junk).not.toMatch(/for (hello|testing|uh|um|hmm)/);
+      const order = await getOrderWithItems(db, agent.state.draftOrderId!);
+      expect(order!.customerName, junk).toBeFalsy();
     }
+  });
+
+  // Bare hesitation ("Um…") answered instantly, not a ~2s LLM turn, and the
+  // current question is re-stated so the stage holds (live call 6964e551).
+  it("a bare hesitation is answered instantly at the ordering stage", async () => {
+    for (const u of ["Um...", "Uh", "Hmm.", "Er-", "mm", "well"]) {
+      const agent = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+      const turn = await agent.handleTurn(u);
+      expect(turn.fastPath, u).toBe("hesitation");
+      expect(turn.text.toLowerCase(), u).toMatch(/no rush|what can i get/);
+    }
+  });
+
+  it("a hesitation keeps the stage (name stage re-asks the name; anything-else asks again)", async () => {
+    const a1 = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(a1, [{ name: "Chicken Kebab", qty: 1 }]);
+    a1.state.lastAssistantText = "Can I get a name for the order?";
+    const t1 = await a1.handleTurn("um");
+    expect(t1.fastPath).toBe("hesitation");
+    expect(t1.text.toLowerCase()).toContain("name for the order");
+
+    const a2 = new OrderAgent(FORBIDDEN_LLM, agentCtx());
+    await draftWith(a2, [{ name: "Chicken Kebab", qty: 1 }]);
+    a2.state.lastAssistantText = "Anything else?";
+    const t2 = await a2.handleTurn("uh");
+    expect(t2.fastPath).toBe("hesitation");
+    expect(t2.text.toLowerCase()).toMatch(/anything else/);
   });
 
   it("real names near the MB1087 fragment guard still capture cleanly", async () => {
@@ -896,7 +927,7 @@ describe("fast paths (LLM must not be called)", () => {
     const agent = new OrderAgent(scripted, agentCtx());
     await draftWith(agent, [{ name: "Chicken Kebab", qty: 1 }]);
     agent.state.lastAssistantText = "Can I get a name for the order?";
-    const r1 = await agent.handleTurn("um"); // not a name -> re-ask (confusion)
+    const r1 = await agent.handleTurn("yes"); // not a name -> re-ask (confusion)
     expect(r1.fastPath).toBe("name_reask");
     const r2 = await agent.handleTurn("Raju"); // real name after confusion -> spell
     expect(r2.fastPath).toBe("name_close");

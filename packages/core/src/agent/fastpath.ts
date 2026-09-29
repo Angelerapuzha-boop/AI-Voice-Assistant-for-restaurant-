@@ -150,6 +150,23 @@ function isGreetingOnly(text: string): boolean {
   return toks.length > 0 && toks.length <= 4 && toks.every((t) => GREETING_WORDS.has(t));
 }
 
+// Pure vocal-pause sounds a caller makes while thinking ("Um…", "Uh…", "Hmm…").
+const HESITATION_SOUNDS = new Set([
+  "um", "umm", "ummm", "uh", "uhh", "uhhh", "ah", "ahh", "oh", "ohh",
+  "mm", "mmm", "hmm", "hm", "hmmm", "er", "err", "erm", "eh", "well",
+]);
+
+/** The whole utterance is just a hesitation — the caller is thinking, not
+ * ordering. Answer instantly ("No rush — …") instead of a ~2s LLM turn (live
+ * call 6964e551: "Um…" took 2.5s). 1-3 tokens, all pause sounds. */
+function isHesitation(text: string): boolean {
+  const toks = normalise(text)
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  return toks.length > 0 && toks.length <= 3 && toks.every((t) => HESITATION_SOUNDS.has(t));
+}
+
 // Words that make an opener pure INTENT ("I'd like to place an order for a
 // takeaway") with no actual item — order verbs + order-type/format words.
 const INTENT_WORDS = new Set([
@@ -1307,6 +1324,27 @@ export async function tryFastPath(
   // "Hang on" — acknowledge and wait, never prompt.
   if (WAIT_REGEX.test(normalise(text)) && !atConfirmStage(state)) {
     return { handled: true, say: "Yep.", toolCalls: calls, kind: "wait" };
+  }
+
+  // A bare hesitation ("Um…", "Uh…", "Hmm…") — the caller's thinking. Answer
+  // warmly and INSTANTLY, re-stating the current question so the stage holds and
+  // their next words still fast-path (live call 6964e551: "Um…" was a 2.5s LLM
+  // turn). Not at confirm (a hesitation there is rare) or mid-pending-item (those
+  // re-ask their own specific question).
+  if (
+    !opts.probe &&
+    isHesitation(text) &&
+    !atConfirmStage(state) &&
+    !state.pendingItem &&
+    !state.pendingFamily
+  ) {
+    if (atNameStage(state)) {
+      return { handled: true, say: "No rush — what's the name for the order?", toolCalls: calls, kind: "hesitation" };
+    }
+    if (state.draftOrderId && atAnythingElseStage(state)) {
+      return { handled: true, say: "No rush — anything else?", toolCalls: calls, kind: "hesitation" };
+    }
+    return { handled: true, say: "No rush — what can I get you?", toolCalls: calls, kind: "hesitation" };
   }
 
   // ---- caller asks what's on the menu ("what do you have?", "the menu?",
