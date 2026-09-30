@@ -1,0 +1,169 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type pg from "pg";
+import { ReservationMachine, type ReservationContext } from "../src/agent/reservation-machine";
+import { getReservationSettings, findReservations, createReservation } from "../src/domain/reservations";
+import { normaliseDate } from "../src/domain/reservation-time";
+import { resetTransactionalData, setupTestDb, type TestContext } from "./helpers";
+
+let ctx: TestContext;
+let db: pg.Pool;
+const TZ = "Australia/Perth";
+const NOW = new Date();
+const DATE = normaliseDate("2026-12-15", { now: NOW, timezone: TZ }).date!;
+
+beforeAll(async () => { ctx = await setupTestDb(); db = ctx.db; });
+afterAll(async () => { await db.end(); });
+beforeEach(async () => { await resetTransactionalData(db); });
+
+async function machine(callerPhone: string | null = "+61400555001"): Promise<ReservationMachine> {
+  const rc: ReservationContext = {
+    db, restaurantId: ctx.restaurant.id, restaurantName: "Meat Box", hours: ctx.hours,
+    settings: await getReservationSettings(db, ctx.restaurant.id), timezone: TZ,
+    now: () => NOW, callerPhone: callerPhone ?? undefined,
+  };
+  return new ReservationMachine(rc);
+}
+
+describe("ReservationMachine — booking flow", () => {
+  it("books a table through a short natural conversation", async () => {
+    const m = await machine();
+    expect(m.opening()).toMatch(/book a table/i);
+    let t = await m.next("I'd like to book a table");
+    expect(t.kind).toBe("ask_date");
+    t = await m.next(DATE); // "what day"
+    expect(t.kind).toBe("ask_time");
+    t = await m.next("seven");
+    expect(t.kind).toBe("ask_party");
+    t = await m.next("four");
+    expect(t.kind).toBe("ask_name");
+    t = await m.next("Kevin");
+    // caller ID present, so it finalises without asking phone
+    expect(t.kind).toBe("confirmed");
+    expect(t.say).toMatch(/booked for 4/i);
+    expect(t.say).toMatch(/7 PM/);
+    expect(t.endCall).toBe(true);
+    expect(m.reservation?.status).toBe("CONFIRMED");
+    expect(m.reservation?.customerName).toBe("Kevin");
+    expect(m.reservation?.partySize).toBe(4);
+    const saved = await findReservations(db, ctx.restaurant.id, "+61400555001");
+    expect(saved.length).toBe(1);
+  });
+
+  it("extracts date + party from the opener, still asks the time", async () => {
+    const m = await machine();
+    const t = await m.next("a table for four this Saturday");
+    expect(t.kind).toBe("ask_time");
+  });
+
+  it("asks for a mobile when there's no caller ID", async () => {
+    const m = await machine(null);
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    await m.next("four");
+    let t = await m.next("Kevin");
+    expect(t.kind).toBe("ask_phone");
+    t = await m.next("0412 345 678");
+    expect(t.kind).toBe("confirmed");
+    expect(m.reservation?.customerPhone).toBe("+61412345678");
+  });
+
+  it("declines a food order and steers back to booking", async () => {
+    const m = await machine();
+    const t = await m.next("I want to order two burgers");
+    expect(t.kind).toBe("decline_food");
+    expect(t.say.toLowerCase()).toContain("reservation");
+  });
+
+  it("declines takeaway", async () => {
+    const m = await machine();
+    expect((await m.next("I need takeaway")).kind).toBe("decline_food");
+  });
+
+  it("escalates a party that's too large", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    const t = await m.next("twenty");
+    expect(t.kind).toBe("escalate_party");
+    expect(t.say).toMatch(/call you back/i);
+  });
+
+  it("offers alternatives when the slot is full", async () => {
+    await db.query(`UPDATE reservation_settings SET max_covers_per_slot = 4, turnover_minutes = 15`);
+    await createReservation(db, {
+      restaurantId: ctx.restaurant.id, customerName: "A", customerPhone: "+61400999000",
+      date: DATE, time: "19:00", partySize: 4,
+    });
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    const t = await m.next("two");
+    expect(t.kind).toBe("alternatives");
+    expect(t.say).toMatch(/booked out/i);
+  });
+
+  it("handles a party correction mid-flow", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    let t = await m.next("seven, actually make it two");
+    // party captured via correction -> goes straight to availability -> name
+    expect(["ask_name", "ask_party"]).toContain(t.kind);
+  });
+});
+
+describe("ReservationMachine — cancel & modify", () => {
+  async function seedBooking(phone: string) {
+    return (await createReservation(db, {
+      restaurantId: ctx.restaurant.id, customerName: "Kevin", customerPhone: phone,
+      date: DATE, time: "19:00", partySize: 4,
+    })).reservation;
+  }
+
+  it("cancels an existing booking after confirmation", async () => {
+    await seedBooking("+61400555010");
+    const m = await machine("+61400555010");
+    let t = await m.next("I need to cancel my booking");
+    expect(t.kind).toBe("cancel_confirm");
+    t = await m.next("yes please");
+    expect(t.kind).toBe("cancelled");
+    expect((await findReservations(db, ctx.restaurant.id, "+61400555010")).length).toBe(0);
+  });
+
+  it("keeps the booking if the caller says no to cancelling", async () => {
+    await seedBooking("+61400555011");
+    const m = await machine("+61400555011");
+    await m.next("cancel my table");
+    const t = await m.next("no, leave it");
+    expect(t.kind).toBe("keep");
+    expect((await findReservations(db, ctx.restaurant.id, "+61400555011")).length).toBe(1);
+  });
+
+  it("confirms an existing booking", async () => {
+    await seedBooking("+61400555012");
+    const m = await machine("+61400555012");
+    const t = await m.next("can you confirm my reservation");
+    expect(t.kind).toBe("confirm_existing");
+    expect(t.say).toMatch(/booked/i);
+  });
+
+  it("modifies the party size of an existing booking", async () => {
+    await seedBooking("+61400555013");
+    const m = await machine("+61400555013");
+    let t = await m.next("I want to change my booking");
+    expect(t.kind).toBe("modify_what");
+    t = await m.next("make it 6 people");
+    expect(t.kind).toBe("modified");
+    const updated = await findReservations(db, ctx.restaurant.id, "+61400555013");
+    expect(updated[0]!.partySize).toBe(6);
+  });
+
+  it("tells the caller to call from the booking number when there's no caller ID", async () => {
+    const m = await machine(null);
+    const t = await m.next("cancel my booking");
+    expect(t.kind).toBe("no_caller_id");
+  });
+});

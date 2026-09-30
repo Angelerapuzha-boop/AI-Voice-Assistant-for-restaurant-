@@ -12,6 +12,7 @@ export * from "./domain/settings";
 export * from "./domain/orders";
 export * from "./domain/reservations";
 export * from "./domain/reservation-time";
+export * from "./agent/reservation-machine";
 export * from "./domain/notifications";
 export * from "./domain/webhooks";
 export * from "./domain/square";
