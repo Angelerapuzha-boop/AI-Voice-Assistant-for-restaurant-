@@ -131,6 +131,11 @@ const RECORD_INBOUND_CALLERS = new Set(
     .filter(Boolean),
 );
 
+// Record EVERY inbound call, not just the test list. Off by default. Recording
+// real customers can require a "this call may be recorded" announcement (AU
+// two-party consent), so enable this only where that's handled or on a test box.
+const RECORD_ALL_INBOUND = (process.env.RECORD_ALL_INBOUND ?? "").toLowerCase() === "true";
+
 /** Start a dual-channel recording on an in-progress call via the Twilio REST
  * API. Fire-and-forget from the voice webhook (the call is already answered).
  * Used only for whitelisted TEST callers. */
@@ -195,9 +200,9 @@ app.post("/twilio/voice", async (req, reply) => {
     // Record TEST callers' own calls (consented) so Kevin has audio — started
     // here on the parent call, so it captures the audio whether it streams to
     // prod or the box. Fire-and-forget; never blocks the TwiML. Never real customers.
-    if (RECORD_INBOUND_CALLERS.has(params.From ?? "")) {
+    if (RECORD_ALL_INBOUND || RECORD_INBOUND_CALLERS.has(params.From ?? "")) {
       startCallRecording(callSid).catch((err) =>
-        req.log.warn({ err: String(err), callSid }, "failed to start inbound test recording"),
+        req.log.warn({ err: String(err), callSid }, "failed to start inbound recording"),
       );
     }
     req.log.info(
