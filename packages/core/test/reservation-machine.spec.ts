@@ -20,6 +20,7 @@ async function machine(callerPhone: string | null = "+61400555001"): Promise<Res
     db, restaurantId: ctx.restaurant.id, restaurantName: "Meat Box", hours: ctx.hours,
     settings: await getReservationSettings(db, ctx.restaurant.id), timezone: TZ,
     now: () => NOW, callerPhone: callerPhone ?? undefined,
+    address: ctx.restaurant.address, phoneDisplay: ctx.restaurant.phoneDisplay,
   };
   return new ReservationMachine(rc);
 }
@@ -288,6 +289,41 @@ describe("ReservationMachine — booking flow", () => {
     const rp = m.gentleReprompt();
     expect(rp.toLowerCase()).toContain("how many");
     expect(rp.toLowerCase()).not.toContain("still there");
+  });
+});
+
+describe("ReservationMachine — info layer (hours & location)", () => {
+  it("answers an hours enquiry from real data, then steers to booking", async () => {
+    const m = await machine();
+    const t = await m.next("what are your hours?");
+    expect(t.kind).toBe("info_hours");
+    expect(t.say.toLowerCase()).toContain("open");
+    expect(t.say.toLowerCase()).toContain("book a table");
+  });
+
+  it("answers a location enquiry", async () => {
+    const m = await machine();
+    const t = await m.next("where are you located?");
+    expect(t.kind).toBe("info_location");
+    expect(t.say.length).toBeGreaterThan(5);
+  });
+
+  it("answers an enquiry MID-booking, then the flow still continues", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE); // -> ask_time
+    let t = await m.next("what time do you close?"); // enquiry mid-flow
+    expect(t.kind).toBe("info_hours");
+    t = await m.next("seven"); // real time answer still advances
+    expect(t.kind).toBe("ask_party");
+  });
+
+  it("does not mistake a booking or a slot answer for an enquiry", async () => {
+    const m = await machine();
+    expect((await m.next("I'd like to book a table")).kind).toBe("ask_date");
+    expect((await m.next(DATE)).kind).toBe("ask_time");
+    expect((await m.next("seven")).kind).toBe("ask_party");
+    expect((await m.next("four")).kind).toBe("ask_name"); // "four" not seen as an enquiry
   });
 });
 

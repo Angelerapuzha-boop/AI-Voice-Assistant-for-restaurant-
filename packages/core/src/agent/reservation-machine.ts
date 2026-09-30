@@ -11,6 +11,7 @@ import {
 import { enqueueNotification } from "../domain/notifications";
 import { localToday, normaliseDate, normaliseTime } from "../domain/reservation-time";
 import {
+  detectInfoQuery,
   detectIntent,
   interpretPartySize,
   isFoodOrderAttempt,
@@ -34,6 +35,9 @@ export interface ReservationContext {
   callId?: string;
   customerSmsEnabled?: boolean;
   ownerAlertNumber?: string;
+  /** For the info layer (spec: factual visiting info, never invented). */
+  address?: string;
+  phoneDisplay?: string;
 }
 
 export type ReservationState =
@@ -202,6 +206,14 @@ export class ReservationMachine {
       );
     }
 
+    // Info layer: answer a factual enquiry (hours / location) from real data,
+    // then carry on where we were. Uses distinctive phrasings that don't collide
+    // with slot answers, so it's safe to check in any pre-confirmed state.
+    if (this.state !== "CONFIRMED" && this.state !== "END") {
+      const info = detectInfoQuery(text);
+      if (info) return this.handleInfo(info);
+    }
+
     switch (this.state) {
       case "GREETING": return this.handleGreeting(text);
       case "COLLECT_DATE": return this.handleDate(text);
@@ -217,6 +229,63 @@ export class ReservationMachine {
       case "ESCALATION": return this.handleEscalation(text);
       default: return this.say("Did you want to book, change or cancel a table?", "reprompt");
     }
+  }
+
+  // ------------------------------------------------------------ info layer
+
+  /** Answer a factual enquiry, then steer back to where we were. Never invents:
+   * everything comes from the restaurant's own hours / address. */
+  private handleInfo(kind: "hours" | "location"): ReservationTurn {
+    const body = kind === "hours" ? this.describeHours() : this.describeLocation();
+    const tail = this.state === "GREETING" || !this.lastPrompt
+      ? " Would you like to book a table?"
+      : ` ${this.lastPrompt}`;
+    return this.say(`${body}${tail}`, `info_${kind}`);
+  }
+
+  private describeHours(): string {
+    const rows = this.ctx.hours ?? [];
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const order = [1, 2, 3, 4, 5, 6, 0]; // Mon → Sun, natural reading order
+    const keyOf = (dow: number): string => {
+      const r = rows.find((x) => x.dayOfWeek === dow);
+      if (!r || r.isClosed || !r.opensAt || !r.closesAt) return "closed";
+      return `${r.opensAt.slice(0, 5)}|${r.closesAt.slice(0, 5)}`;
+    };
+    const groups: { key: string; days: number[] }[] = [];
+    for (const d of order) {
+      const k = keyOf(d);
+      const last = groups[groups.length - 1];
+      if (last && last.key === k) last.days.push(d);
+      else groups.push({ key: k, days: [d] });
+    }
+    if (groups.every((g) => g.key === "closed")) {
+      return "I'm not sure of the exact hours right now — I can have the team confirm.";
+    }
+    const span = (days: number[]): string =>
+      days.length === 1 ? dayNames[days[0]!]! : `${dayNames[days[0]!]!} to ${dayNames[days[days.length - 1]!]!}`;
+    const openParts: string[] = [];
+    const closedParts: string[] = [];
+    for (const g of groups) {
+      if (g.key === "closed") { closedParts.push(span(g.days)); continue; }
+      const [o, c] = g.key.split("|") as [string, string];
+      const label = o === "00:00" && (c === "23:59" || c === "00:00")
+        ? "24 hours"
+        : `${speakTime(o)} to ${speakTime(c)}`;
+      openParts.push(`${span(g.days)} ${label}`);
+    }
+    let s = `We're open ${openParts.join("; ")}.`;
+    if (closedParts.length) s += ` We're closed ${closedParts.join(" and ")}.`;
+    return s;
+  }
+
+  private describeLocation(): string {
+    const a = (this.ctx.address ?? "").trim();
+    if (a) return `We're at ${a}.`;
+    const p = (this.ctx.phoneDisplay ?? "").trim();
+    return p
+      ? `I don't have the address to hand, but you can reach the restaurant on ${p}.`
+      : "I can have the team text you the address.";
   }
 
   // ------------------------------------------------------------ booking flow

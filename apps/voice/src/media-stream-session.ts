@@ -468,6 +468,8 @@ export class MediaStreamSession {
         callId: call.id,
         customerSmsEnabled: settings.customerSmsEnabled,
         ownerAlertNumber: this.ownerAlertNumber,
+        address: restaurant.address,
+        phoneDisplay: restaurant.phoneDisplay,
       });
     } else {
       let llm: Llm;

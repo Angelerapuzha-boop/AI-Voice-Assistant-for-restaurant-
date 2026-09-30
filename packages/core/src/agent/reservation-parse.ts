@@ -72,6 +72,25 @@ export function isFoodOrderAttempt(text: string): boolean {
   return FOOD_RE.test(t) && !BOOK_RE.test(t);
 }
 
+// Distinctive multi-word enquiry phrases — chosen so they never collide with a
+// date/time/party/name/phone slot answer, so the info layer is safe to check in
+// any state (spec: answer general enquiries factually, never invent).
+const HOURS_RE =
+  /\b(what (?:time|hours)|opening hours|your hours|hours of (?:operation|business)|trading hours|are you open|what time do you (?:open|close|shut)|when do you (?:open|close|shut)|open (?:on|today|tomorrow|now|late|until|till)|what time.*\bopen|how late.*open)\b/;
+const LOCATION_RE =
+  /\b(where are you|where'?s (?:the (?:restaurant|place|venue)|your|it)|what'?s the address|your address|the address|whereabouts|how do i (?:get|find)|how to get (?:there|to you)|located|your location|directions?)\b/;
+
+/** A general enquiry the info layer can answer from real data. null otherwise. */
+export function detectInfoQuery(text: string): "hours" | "location" | null {
+  const t = normalise(text);
+  if (!t) return null;
+  // A genuine booking/change/cancel/food request is NOT an info query.
+  if (FOOD_RE.test(t)) return null;
+  if (LOCATION_RE.test(t)) return "location";
+  if (HOURS_RE.test(t)) return "hours";
+  return null;
+}
+
 // ------------------------------------------------------------- party size
 
 /**

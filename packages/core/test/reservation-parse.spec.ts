@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectInfoQuery,
   interpretPartySize,
   numberWord,
   parseName,
@@ -107,6 +108,27 @@ describe("parsePartySize (confident-only wrapper)", () => {
     expect(parsePartySize("for")).toBeNull(); // homophone is candidate, not confident
     expect(parsePartySize("four or five")).toBeNull(); // ambiguous
     expect(parsePartySize("blah")).toBeNull();
+  });
+});
+
+describe("detectInfoQuery", () => {
+  it("detects hours enquiries", () => {
+    for (const q of ["what are your hours?", "what time do you open", "are you open on Sunday", "opening hours", "how late are you open"]) {
+      expect(detectInfoQuery(q), q).toBe("hours");
+    }
+  });
+  it("detects location enquiries", () => {
+    for (const q of ["where are you?", "what's the address", "where are you located", "how do I get there", "whereabouts are you"]) {
+      expect(detectInfoQuery(q), q).toBe("location");
+    }
+  });
+  it("does NOT fire on booking phrases or slot answers", () => {
+    for (const q of ["book a table for four", "today", "tomorrow at seven", "four people", "Kevin", "0412 345 678", "seven", "yes"]) {
+      expect(detectInfoQuery(q), q).toBeNull();
+    }
+  });
+  it("a food order is not an info query (declined elsewhere)", () => {
+    expect(detectInfoQuery("can I order a burger")).toBeNull();
   });
 });
 
