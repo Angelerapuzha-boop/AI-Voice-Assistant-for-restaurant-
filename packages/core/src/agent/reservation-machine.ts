@@ -252,6 +252,9 @@ export class ReservationMachine {
       if (!r || r.isClosed || !r.opensAt || !r.closesAt) return "closed";
       return `${r.opensAt.slice(0, 5)}|${r.closesAt.slice(0, 5)}`;
     };
+    // Open around the clock every day — say it the natural way.
+    const is24 = (k: string): boolean => k === "00:00|23:59" || k === "00:00|00:00";
+    if (order.every((d) => is24(keyOf(d)))) return "We're open 24 hours a day, seven days a week.";
     const groups: { key: string; days: number[] }[] = [];
     for (const d of order) {
       const k = keyOf(d);

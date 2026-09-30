@@ -308,6 +308,20 @@ describe("ReservationMachine — info layer (hours & location)", () => {
     expect(t.say.length).toBeGreaterThan(5);
   });
 
+  it("speaks 24/7 hours naturally", async () => {
+    const open247 = Array.from({ length: 7 }, (_, d) => ({
+      id: `h${d}`, restaurantId: ctx.restaurant.id, dayOfWeek: d,
+      opensAt: "00:00:00", closesAt: "23:59:00", isClosed: false,
+    }));
+    const m = new ReservationMachine({
+      db, restaurantId: ctx.restaurant.id, restaurantName: "Meat Box", hours: open247,
+      settings: await getReservationSettings(db, ctx.restaurant.id), timezone: TZ,
+      now: () => NOW, callerPhone: "+61400555099",
+    });
+    const t = await m.next("what time do you open?");
+    expect(t.say).toMatch(/24 hours a day, seven days a week/i);
+  });
+
   it("answers an enquiry MID-booking, then the flow still continues", async () => {
     const m = await machine();
     await m.next("book a table");
