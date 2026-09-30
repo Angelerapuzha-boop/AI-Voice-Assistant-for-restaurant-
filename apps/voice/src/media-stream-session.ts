@@ -512,6 +512,13 @@ export class MediaStreamSession {
       }
     }
 
+    // When every inbound call is recorded, open with a brief consent notice
+    // (AU: callers must be told a call may be recorded). Test-number recordings
+    // are the caller's own consented calls, so they don't get the notice.
+    if (env.RECORD_ALL_INBOUND.toLowerCase() === "true") {
+      greeting = `Just so you know, this call may be recorded. ${greeting}`;
+    }
+
     // Speak the greeting ourselves (no platform welcome message here).
     await appendTranscript(db, call.id, {
       role: "assistant",

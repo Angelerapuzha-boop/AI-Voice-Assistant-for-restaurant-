@@ -57,6 +57,9 @@ const envSchema = z.object({
   // brain; "reservations" swaps in the deterministic table-reservation state
   // machine. Default stays "ordering" so live behaviour is unchanged until cutover.
   BUSINESS_MODE: z.enum(["ordering", "reservations"]).default("ordering"),
+  // Record EVERY inbound call. Off by default. When "true", callers hear a
+  // "this call may be recorded" notice at the start (AU consent).
+  RECORD_ALL_INBOUND: z.string().default(""),
   ELEVENLABS_API_KEY: z.string().default(""),
   ELEVENLABS_AGENT_ID: z.string().default(""),
   ELEVENLABS_BRIDGE_SECRET: z.string().default(""),
