@@ -3,14 +3,34 @@
  * is state-directed: the machine knows which slot it's collecting and parses the
  * answer for THAT slot, which is far more reliable than blind multi-slot parsing.
  * The LLM (voice layer) only helps with messy multi-slot openers.
+ *
+ * Party size is the highest-risk slot on a phone line — a single number, easy to
+ * mishear, and (from the live 8-PM-for-four loop, call 8d55f5f8) the one that
+ * trapped a caller in "Sorry, how many people?" five times. So it has a proper
+ * three-way interpreter: a CONFIDENT value, an uncertain CANDIDATE to confirm
+ * ("Four people?"), or an AMBIGUOUS pair to disambiguate ("four or five?"),
+ * never a blind reject that loops.
  */
 
-const NUM_WORDS: Record<string, number> = {
-  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
-  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
-  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
-  couple: 2, pair: 2, dozen: 12,
+/** Spoken/typed numbers → integer. No "a"/"an" (too ambiguous as a bare count). */
+const WORD_NUM: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, couple: 2, pair: 2, dozen: 12,
 };
+
+/** Number spoken as a word (1-20) for a natural confirmation ("Four people?"). */
+export function numberWord(n: number): string {
+  const w = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+  ];
+  return n >= 0 && n <= 20 ? w[n]! : String(n);
+}
+
+const PARTY_MAX = 100;
 
 function normalise(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9:.\-'\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -52,62 +72,178 @@ export function isFoodOrderAttempt(text: string): boolean {
   return FOOD_RE.test(t) && !BOOK_RE.test(t);
 }
 
+// ------------------------------------------------------------- party size
+
 /**
- * Extract a party size. Handles "four", "for 4", "party of six", "table for 2",
- * "just the two of us", "me and my wife" (2), "4 people". Returns null if none.
+ * Interpretation of a party-size answer.
+ * - `value`     — confident count, use it.
+ * - `candidate` — uncertain best guess (e.g. STT wrote the homophone "for" for
+ *                 "four", or a low-signal single word); CONFIRM it ("Four
+ *                 people?") rather than rejecting or guessing (spec §7, §8).
+ * - `ambiguous` — two plausible counts ("four or five"); ask which (spec §23).
+ * - `none`      — nothing number-like; the machine re-prompts / offers keypad.
  */
-const PARTY_FILLER = new Set([
-  "about", "around", "like", "um", "uh", "er", "maybe", "roughly", "approximately",
-  "ish", "just", "people", "persons", "guests", "pax", "adults", "heads", "covers",
-  "seats", "of", "us", "a", "the", "party", "group", "table", "booking", "for",
-  "please", "thanks", "yeah", "yes", "so", "well", "and",
+export type PartySizeResult =
+  | { kind: "value"; value: number }
+  | { kind: "candidate"; value: number }
+  | { kind: "ambiguous"; options: number[] }
+  | { kind: "none" };
+
+// Words that are noise AROUND a number when a count is expected. Stripping them
+// lets "about four", "we're four", "it's four", "there are four of us",
+// "probably four" all reduce to the bare count. Deliberately excludes "for"/
+// "fore" (handled as the "four" homophone) and "or" (handled as ambiguity).
+const PARTY_NOISE = new Set([
+  "about", "around", "like", "um", "uh", "er", "erm", "hmm", "maybe", "roughly",
+  "approximately", "approx", "ish", "just", "only", "probably", "possibly",
+  "definitely", "think", "reckon", "say", "guess",
+  "people", "person", "persons", "guests", "guest", "pax", "adults", "adult",
+  "kids", "heads", "head", "covers", "cover", "seats", "seat", "of", "us",
+  "a", "an", "the", "party", "group", "table", "booking", "book",
+  "please", "thanks", "thank", "cheers", "yeah", "yep", "yes", "so", "well",
+  "and", "it", "its", "that", "thats", "there", "be", "gonna", "we", "were",
+  "put", "name", "under", "total", "all", "up", "altogether", "hi", "hello",
+  "hey", "i", "m", "re", "s", "ll", "d", "have", "got", "is", "will", "gonna",
 ]);
 
-const toNum = (raw: string): number | null => {
-  const n = /^\d+$/.test(raw) ? Number(raw) : NUM_WORDS[raw];
-  return n && Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
-};
+const CORRECTION_RE =
+  /\b(actually|make it|change (?:it |that )?to|scrap that|i mean|rather|let'?s say|better (?:make it|do)|no)\b/gi;
 
-/**
- * Extract a party size. Handles "four", "for 4", "party of six", "just the two
- * of us", "4 people", punctuation ("Four."), and STT rendering spoken numbers as
- * TIMES ("4:00" -> 4, "12:00" -> 12) which is common on the phone. Returns null
- * if no clear count.
- */
-export function parsePartySize(text: string): number | null {
-  // "4:00"/"12:00" -> "4"/"12" (STT often writes a spoken count as a time),
-  // then strip punctuation so "Four." / "4," parse.
-  const t = normalise(text)
+/** μ-law/STT can render a spoken count as a clock time ("four" → "4:00"), and
+ * add trailing punctuation ("Four."). Fold those to the bare token stream. */
+function tokenise(text: string): string[] {
+  return normalise(text)
     .replace(/\b(\d{1,2}):00\b/g, "$1")
     .replace(/[.:'\-]/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
-  if (!t) return null;
-  if (/\b(just )?(me|myself) (and|&) (my )?(wife|husband|partner|mate|friend|mrs|missus)\b/.test(t)) return 2;
-  if (/\bjust me\b|\bmyself\b|\bfor one\b|\bone person\b/.test(t)) return 1;
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
 
-  const patterns = [
-    /\b(?:party|group|table|booking)\s+(?:of|for)\s+([a-z0-9]+)\b/,
-    /\bfor\s+([a-z0-9]+)\b/,
-    /\b([a-z0-9]+)\s+(?:people|persons|guests|pax|of us|adults|heads|covers|seats)\b/,
-    /^([a-z0-9]+)$/,
-  ];
-  for (const re of patterns) {
-    const m = t.match(re);
-    if (m) {
-      const n = toNum(m[1]!);
-      if (n) return n;
-    }
+function toInt(w: string): number | null {
+  if (/^\d{1,2}$/.test(w)) {
+    const n = Number(w);
+    return n >= 1 && n <= PARTY_MAX ? n : null;
   }
-  // Fallback: after dropping filler words, a single number token IS the count
-  // ("about four" -> 4, "4:00" -> 4, "twelve" -> 12).
-  const toks = t.split(" ").filter((w) => w && !PARTY_FILLER.has(w));
-  if (toks.length === 1) {
-    const n = toNum(toks[0]!);
+  const n = WORD_NUM[w];
+  return n && n >= 1 && n <= PARTY_MAX ? n : null;
+}
+
+function firstNumber(tokens: string[]): number | null {
+  for (const w of tokens) {
+    const n = toInt(w);
     if (n) return n;
   }
   return null;
 }
+
+/** "four or five", "four to five", "between four and five" → the two counts. */
+function detectRange(tokens: string[]): number[] | null {
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const a = toInt(tokens[i]!);
+    if (!a) continue;
+    // a  [or|to|-]  b   (adjacent), or  a  b  with a joiner between handled by
+    // the general "between x and y" below.
+    const j = tokens[i + 1]!;
+    if ((j === "or" || j === "to" || j === "-") && i + 2 < tokens.length) {
+      const b = toInt(tokens[i + 2]!);
+      if (b && b !== a && Math.abs(b - a) <= 4) return [a, b];
+    }
+  }
+  if (tokens.includes("between") && tokens.includes("and")) {
+    const nums = tokens.map(toInt).filter((n): n is number => n !== null);
+    if (nums.length >= 2 && nums[0] !== nums[1] && Math.abs(nums[0]! - nums[1]!) <= 6) {
+      return [nums[0]!, nums[1]!];
+    }
+  }
+  return null;
+}
+
+/**
+ * Interpret a party-size answer. `expectingParty` (true while the machine is in
+ * the party slot) unlocks the "for" → 4 homophone as a CANDIDATE — context-
+ * sensitive so it never fires on "for dinner" or in a general opener (spec §2).
+ */
+export function interpretPartySize(
+  text: string,
+  opts: { expectingParty?: boolean } = {},
+): PartySizeResult {
+  const tokens = tokenise(text);
+  if (tokens.length === 0) return { kind: "none" };
+  const t = tokens.join(" ");
+
+  // Explicit "just me" / "me and my wife" phrasings.
+  if (/\b(just )?(me|myself) (and|&|n) (my )?(wife|husband|partner|mate|friend|mrs|missus|girlfriend|boyfriend|hubby)\b/.test(t)) {
+    return { kind: "value", value: 2 };
+  }
+  if (/\bjust me\b|\bmyself\b|\bfor one\b|\bone person\b|\bsolo\b|\bon my own\b/.test(t)) {
+    return { kind: "value", value: 1 };
+  }
+
+  // A correction wins: the number AFTER the last "actually/make it/no…"
+  // ("maybe four, actually five" → 5).
+  let lastCorr = -1;
+  CORRECTION_RE.lastIndex = 0;
+  for (let m = CORRECTION_RE.exec(t); m; m = CORRECTION_RE.exec(t)) {
+    lastCorr = m.index + m[0].length;
+  }
+  if (lastCorr >= 0) {
+    const after = t.slice(lastCorr).trim().split(" ").filter(Boolean);
+    const n = firstNumber(after);
+    if (n) return { kind: "value", value: n };
+  }
+
+  // Ambiguous "four or five" — never silently pick one (spec §23).
+  const range = detectRange(tokens);
+  if (range) return { kind: "ambiguous", options: range };
+
+  // Confident phrasings.
+  const patterns = [
+    /\b(?:party|group|table|booking)\s+(?:of|for)\s+([a-z0-9]+)\b/,
+    /\bfor\s+([a-z0-9]+)\b/,
+    /\b([a-z0-9]+)\s+(?:people|persons|person|guests|guest|pax|adults|adult|of us|heads|covers|seats)\b/,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m) {
+      const n = toInt(m[1]!);
+      if (n) return { kind: "value", value: n };
+    }
+  }
+
+  // Reduce to meaningful tokens: drop noise; keep numbers, "for"/"fore".
+  const meaningful = tokens.filter((w) => !PARTY_NOISE.has(w) && w !== "or");
+  const nums = meaningful.map(toInt).filter((n): n is number => n !== null);
+  const forHomophone = meaningful.some((w) => w === "for" || w === "fore");
+  const nonNumberWords = meaningful.filter((w) => toInt(w) === null && w !== "for" && w !== "fore");
+
+  // Exactly one count and nothing else contentful → confident.
+  if (nums.length === 1 && nonNumberWords.length === 0) return { kind: "value", value: nums[0]! };
+
+  // No number, but "for"/"fore" alone in the party slot → the "four" homophone,
+  // offered as a candidate to confirm (spec §2, §7).
+  if (opts.expectingParty && nums.length === 0 && forHomophone && nonNumberWords.length === 0) {
+    return { kind: "candidate", value: 4 };
+  }
+
+  // A lone number buried in filler while we're expecting party ("yeah nah four
+  // thanks") → candidate; confirm rather than reject.
+  if (opts.expectingParty && nums.length === 1) return { kind: "candidate", value: nums[0]! };
+
+  return { kind: "none" };
+}
+
+/**
+ * Confident party size only (number | null) — for opener extraction and
+ * corrections where guessing is unsafe. Wraps the richer interpreter.
+ */
+export function parsePartySize(text: string): number | null {
+  const r = interpretPartySize(text);
+  return r.kind === "value" ? r.value : null;
+}
+
+// ------------------------------------------------------------- name / phone
 
 const NON_NAME = new Set([
   "yes", "yeah", "yep", "no", "nah", "nope", "ok", "okay", "sure", "thanks",
@@ -182,12 +318,12 @@ export function parsePhone(text: string): string | null {
 /** A short affirmative ("yes", "yep", "that works", "go on"). */
 export function isYes(text: string): boolean {
   const t = normalise(text);
-  return /\b(yes|yeah|yep|yup|sure|please|correct|that'?s right|go on|sounds good|perfect|lovely|good|ok|okay|do it|book it|that works|either|first one|second one)\b/.test(t)
-    && !/\bno\b|\bnot\b|\bdon'?t\b/.test(t);
+  return /\b(yes|yeah|yep|yup|sure|please|correct|that'?s right|go on|sounds good|perfect|lovely|good|ok|okay|do it|book it|that works|either|first one|second one|spot on|too right|righto|right)\b/.test(t)
+    && !/\bno\b|\bnot\b|\bdon'?t\b|\bnope\b|\bnah\b/.test(t);
 }
 
 /** A short negative ("no", "nah", "neither", "that won't work"). */
 export function isNo(text: string): boolean {
   const t = normalise(text);
-  return /\b(no|nah|nope|neither|won'?t work|doesn'?t work|can'?t do|another|different|something else)\b/.test(t);
+  return /\b(no|nah|nope|neither|won'?t work|doesn'?t work|can'?t do|another|different|something else|not that|not really|nope)\b/.test(t);
 }

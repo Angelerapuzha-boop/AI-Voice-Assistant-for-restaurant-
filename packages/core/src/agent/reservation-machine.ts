@@ -9,12 +9,14 @@ import {
   ReservationCapacityError,
 } from "../domain/reservations";
 import { enqueueNotification } from "../domain/notifications";
-import { normaliseDate, normaliseTime } from "../domain/reservation-time";
+import { localToday, normaliseDate, normaliseTime } from "../domain/reservation-time";
 import {
   detectIntent,
+  interpretPartySize,
   isFoodOrderAttempt,
   isNo,
   isYes,
+  numberWord,
   parseName,
   parsePartySize,
   parsePhone,
@@ -39,6 +41,7 @@ export type ReservationState =
   | "COLLECT_DATE"
   | "COLLECT_TIME"
   | "COLLECT_PARTY_SIZE"
+  | "CONFIRM_PARTY"
   | "OFFER_ALTERNATIVES"
   | "COLLECT_NAME"
   | "COLLECT_PHONE"
@@ -65,6 +68,15 @@ export interface ReservationTurn {
   endCall?: boolean;
 }
 
+/** A snapshot of the machine's internals for per-turn debug logging (spec §18). */
+export interface ReservationDebug {
+  state: ReservationState;
+  draft: Draft;
+  pendingParty?: number;
+  ambiguousParty?: number[];
+  reasks: { date: number; time: number; party: number; name: number; phone: number };
+}
+
 // ---------------------------------------------------------------- speech helpers
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -72,6 +84,8 @@ const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June", "July", "August",
   "September", "October", "November", "December",
 ];
+
+const cap = (s: string): string => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 
 /** "2026-10-03" -> "Saturday the 3rd of October". */
 export function speakDate(dateIso: string): string {
@@ -92,10 +106,38 @@ export function speakTime(time: string): string {
   return m === 0 ? `${h12} ${suffix}` : `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+function isoOf(p: { year: number; month: number; day: number }): string {
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+function addDaysIso(dateIso: string, add: number): string {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const s = new Date(Date.UTC(y!, m! - 1, d!, 12) + add * 86_400_000);
+  return isoOf({ year: s.getUTCFullYear(), month: s.getUTCMonth() + 1, day: s.getUTCDate() });
+}
+
+/** A warm, relative way to say a booking's when: "at 8 PM tonight", "tomorrow at
+ * 7 PM", or "on Saturday the 3rd of October at 7 PM" for later dates. */
+function speakWhen(dateIso: string, time: string, now: Date, tz: string): string {
+  const tstr = speakTime(time);
+  const todayIso = isoOf(localToday(now, tz));
+  const h = Number(time.split(":")[0]);
+  if (dateIso === todayIso) {
+    if (h >= 17) return `at ${tstr} tonight`;
+    if (h < 12) return `at ${tstr} this morning`;
+    return `at ${tstr} this afternoon`;
+  }
+  if (dateIso === addDaysIso(todayIso, 1)) return `tomorrow at ${tstr}`;
+  return `on ${speakDate(dateIso)} at ${tstr}`;
+}
+
 /**
- * Deterministic reservation dialogue controller (spec §15). The LLM never drives
- * the booking transaction — it only helps the voice layer interpret speech into
- * the utterances fed here. Every decision, availability check and write is code.
+ * Deterministic reservation dialogue controller (spec §15, §16). The LLM never
+ * drives the booking transaction — it only helps the voice layer interpret
+ * speech into the utterances fed here. Every decision, availability check and
+ * write is code. Recovery is bounded (spec §4, §5, §17): no field is ever asked
+ * the same way twice in a row, and after two failed attempts it changes strategy
+ * (keypad, then a staff call-back) rather than looping.
  */
 export class ReservationMachine {
   state: ReservationState = "GREETING";
@@ -108,17 +150,46 @@ export class ReservationMachine {
   private dateReasks = 0;
   private timeReasks = 0;
   private partyReasks = 0;
-  /** After escalation we collect name then phone for a call-back request. */
-  private escalationReason = "";
+  /** A party size we heard but aren't sure of, awaiting a yes/no ("Four people?"). */
+  private pendingParty: number | undefined;
+  /** Two plausible counts from "four or five", awaiting which one. */
+  private ambiguousParty: number[] | undefined;
+  /** The last question we asked, for a gentle silence re-prompt (spec §11). */
+  private lastPrompt = "";
 
   constructor(private ctx: ReservationContext) {}
 
-  /** The opening line, spoken before the caller's first utterance. */
-  opening(): string {
-    return `Thanks for calling ${this.ctx.restaurantName}. I can help you book a table. What day were you after?`;
+  /** The opening line, spoken before the caller's first utterance (spec §10):
+   * short, warm, reservations-framed. Recording notice folded in when required. */
+  opening(opts: { recordingNotice?: boolean } = {}): string {
+    const notice = opts.recordingNotice ? " This call may be recorded." : "";
+    const line = `Hi, thanks for calling ${this.ctx.restaurantName}.${notice} Are you looking to book a table?`;
+    this.lastPrompt = "Are you looking to book a table?";
+    return line;
+  }
+
+  /** A softened re-ask of the current question, for the silence watchdog. */
+  gentleReprompt(): string {
+    return this.lastPrompt ? `Take your time. ${this.lastPrompt}` : "Whenever you're ready — how can I help?";
+  }
+
+  /** Internal snapshot for turn-level debugging (spec §18). Never spoken. */
+  debug(): ReservationDebug {
+    return {
+      state: this.state,
+      draft: { ...this.draft },
+      pendingParty: this.pendingParty,
+      ambiguousParty: this.ambiguousParty,
+      reasks: {
+        date: this.dateReasks, time: this.timeReasks, party: this.partyReasks,
+        name: this.nameReasks, phone: this.phoneReasks,
+      },
+    };
   }
 
   private say(say: string, kind: string, endCall = false): ReservationTurn {
+    // Remember questions so the silence watchdog can gently re-ask this exact one.
+    if (!endCall && /\?$/.test(say.trim())) this.lastPrompt = say.trim().split(". ").pop() ?? say.trim();
     return { say, kind, endCall };
   }
 
@@ -126,7 +197,7 @@ export class ReservationMachine {
     // Food ordering is out of scope in every pre-confirmed state (spec §1).
     if (this.state !== "CONFIRMED" && this.state !== "END" && isFoodOrderAttempt(text)) {
       return this.say(
-        "Sorry, I can only help with table reservations over the phone. You're welcome to place a food order directly with the restaurant. Did you want to book a table?",
+        "I can only help with table reservations on this line — did you want to book a table?",
         "decline_food",
       );
     }
@@ -136,6 +207,7 @@ export class ReservationMachine {
       case "COLLECT_DATE": return this.handleDate(text);
       case "COLLECT_TIME": return this.handleTime(text);
       case "COLLECT_PARTY_SIZE": return this.handleParty(text);
+      case "CONFIRM_PARTY": return this.handleConfirmParty(text);
       case "OFFER_ALTERNATIVES": return this.handleAlternatives(text);
       case "COLLECT_NAME": return this.handleName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
@@ -156,11 +228,18 @@ export class ReservationMachine {
       return this.beginFindBooking();
     }
     if (intent === "info") {
-      return this.say("Happy to help with that when you're ready to book — what day were you after?", "info");
+      return this.say("Happy to help — what day were you after?", "info");
     }
-    // Default to booking. Pull any date / party already offered in the opener.
-    this.applyDateFrom(text);
-    this.applyPartyFrom(text);
+    // Pull anything already offered in the opener so we don't re-ask it (spec §14).
+    const gotDate = this.applyDateFrom(text);
+    const gotParty = this.applyPartyFrom(text);
+    const gotTime = this.applyTimeFrom(text);
+    if (!gotDate && !gotParty && !gotTime && isNo(text)) {
+      return this.say(
+        "No worries. I can book you a table, or change one you've already got — what would you like?",
+        "greeting_help",
+      );
+    }
     return this.advanceBooking();
   }
 
@@ -179,10 +258,34 @@ export class ReservationMachine {
     return false;
   }
 
+  /** Extract a time from a free-form opener ONLY when there's an explicit time
+   * cue, and after blanking out a party number so "for four" isn't read as 4 AM
+   * (spec §14). Bare openers with no time still fall through to the time question. */
+  private applyTimeFrom(text: string): boolean {
+    let t = ` ${text.toLowerCase()} `;
+    if (this.draft.partySize !== undefined) {
+      const n = this.draft.partySize;
+      const w = numberWord(n);
+      t = t
+        .replace(new RegExp(`\\bfor (?:${n}|${w})\\b`, "g"), " ")
+        .replace(new RegExp(`\\b(?:${n}|${w}) (?:people|persons|guests|pax|adults|of us|heads)\\b`, "g"), " ")
+        .replace(new RegExp(`\\b(?:party|group|table|booking) (?:of|for) (?:${n}|${w})\\b`, "g"), " ");
+    }
+    const hasCue =
+      /\b\d{1,2}\s*(?:am|pm)\b/.test(t) ||
+      /\b\d{1,2}[:.h]\d{2}\b/.test(t) ||
+      /\bo'?clock\b/.test(t) ||
+      /\b(?:at|around|about|by|for)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midday|midnight|half|quarter)\b/.test(t);
+    if (!hasCue) return false;
+    const r = normaliseTime(t);
+    if (r.time) { this.draft.time = r.time; return true; }
+    return false;
+  }
+
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
-    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure. What day were you after?", "ask_date"); }
-    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say("And what time?", "ask_time"); }
+    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure, what day were you after?", "ask_date"); }
+    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say("What time were you thinking?", "ask_time"); }
     if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say("How many people?", "ask_party"); }
     return this.runAvailability();
   }
@@ -196,29 +299,119 @@ export class ReservationMachine {
     if (this.dateReasks >= 3) return this.beginEscalation();
     if (r.error === "PAST") return Promise.resolve(this.say("That day's already passed — what day would you like?", "ask_date"));
     if (r.error === "TOO_FAR") return Promise.resolve(this.say("That's a bit too far ahead — what day would you like?", "ask_date"));
-    return Promise.resolve(this.say(this.dateReasks === 1 ? "Sorry, what day would you like the table?" : "Which day would suit — a weekday or the weekend?", "ask_date"));
+    return Promise.resolve(this.say(
+      this.dateReasks === 1 ? "What day would you like the table?" : "Which day suits — today, tomorrow, or later in the week?",
+      "ask_date",
+    ));
   }
 
   private handleTime(text: string): Promise<ReservationTurn> {
-    // Allow a correction that also changes the party ("actually make it five").
-    this.applyPartyCorrection(text);
-    const r = normaliseTime(text);
+    // "seven, actually make it two" — a mid-answer party correction: take the
+    // time from BEFORE the correction word and the party from AFTER it. Only
+    // splits when the correction is genuinely mid-utterance (index > 0), so a
+    // leading "no, seven" stays a pure time answer.
+    const corr = text.match(/\b(actually|make it|change (?:it |that )?to|i mean|rather|no)\b/i);
+    const split = corr && corr.index !== undefined && corr.index > 0;
+    const timePart = split ? text.slice(0, corr!.index) : text;
+    if (split) {
+      const p = parsePartySize(text.slice(corr!.index!));
+      if (p) this.draft.partySize = p;
+    }
+    const r = normaliseTime(timePart.trim() || text);
     if (r.time) { this.timeReasks = 0; this.draft.time = r.time; return this.advanceBooking(); }
     this.timeReasks++;
     if (this.timeReasks >= 3) return this.beginEscalation();
-    return Promise.resolve(this.say(this.timeReasks === 1 ? "Sorry, what time were you after?" : "What time — like six, seven or eight?", "ask_time"));
+    return Promise.resolve(this.say(
+      this.timeReasks === 1 ? "What time were you after?" : "What time — say, six, seven or eight?",
+      "ask_time",
+    ));
   }
 
+  /**
+   * Party size — the highest-risk slot (spec §2-§8, §23). Confident answers pass
+   * straight through; an uncertain best guess (STT "for" for "four", a lone
+   * number in filler) is CONFIRMED not rejected; "four or five" is disambiguated;
+   * and an unparseable answer escalates recovery (reword → keypad → staff
+   * call-back) instead of looping the same question.
+   */
   private handleParty(text: string): Promise<ReservationTurn> {
-    const n = parsePartySize(text);
-    if (n) { this.partyReasks = 0; this.draft.partySize = n; return this.advanceBooking(); }
+    // Resolve a pending "four or five?" by picking the earlier/later option.
+    if (this.ambiguousParty) {
+      const [a, b] = this.ambiguousParty;
+      const pick =
+        /\b(first|former|smaller|lower|fewer|less)\b/i.test(text) ? a :
+        /\b(second|latter|bigger|higher|more|larger)\b/i.test(text) ? b :
+        null;
+      if (pick) { this.ambiguousParty = undefined; return this.acceptParty(pick); }
+    }
+
+    const r = interpretPartySize(text, { expectingParty: true });
+    if (r.kind === "value") return this.acceptParty(r.value);
+    if (r.kind === "ambiguous") {
+      this.ambiguousParty = r.options;
+      return Promise.resolve(this.say(
+        `Should I book for ${numberWord(r.options[0]!)} or ${numberWord(r.options[1]!)}?`,
+        "ask_party",
+      ));
+    }
+    if (r.kind === "candidate") {
+      this.pendingParty = r.value;
+      this.state = "CONFIRM_PARTY";
+      return Promise.resolve(this.say(`${cap(numberWord(r.value))} people?`, "confirm_party"));
+    }
+    // Nothing number-like. Escalate the recovery strategy (spec §5): one reword,
+    // then keypad, then a staff call-back. Never the same question, never "Sorry".
     this.partyReasks++;
     if (this.partyReasks >= 3) return this.beginEscalation();
-    return Promise.resolve(this.say(this.partyReasks === 1 ? "Sorry, how many people?" : "Just the number of guests, thanks?", "ask_party"));
+    return Promise.resolve(this.say(
+      this.partyReasks === 1
+        ? "How many people, all up?"
+        : "I didn't catch the number — you can say it, or tap it in on your keypad.",
+      this.partyReasks === 1 ? "ask_party" : "ask_party_dtmf",
+    ));
   }
 
-  /** Graceful escalation (§28): stop looping, take a name + mobile for a call-back
-   * request. Never a confirmed booking (§31). */
+  private acceptParty(n: number): Promise<ReservationTurn> {
+    this.partyReasks = 0;
+    this.pendingParty = undefined;
+    this.ambiguousParty = undefined;
+    this.draft.partySize = n;
+    return this.advanceBooking();
+  }
+
+  /** "Four people?" — resolve the pending candidate (spec §8). A fresh number
+   * overrides it; yes accepts; no re-asks; anything else re-confirms once. */
+  private handleConfirmParty(text: string): Promise<ReservationTurn> {
+    const r = interpretPartySize(text, { expectingParty: true });
+    if (r.kind === "value") return this.acceptParty(r.value);
+    if (r.kind === "ambiguous") {
+      this.ambiguousParty = r.options;
+      this.state = "COLLECT_PARTY_SIZE";
+      return Promise.resolve(this.say(
+        `Should I book for ${numberWord(r.options[0]!)} or ${numberWord(r.options[1]!)}?`,
+        "ask_party",
+      ));
+    }
+    if (isYes(text) && this.pendingParty !== undefined) return this.acceptParty(this.pendingParty);
+    if (isNo(text)) {
+      this.pendingParty = undefined;
+      this.state = "COLLECT_PARTY_SIZE";
+      return Promise.resolve(this.say("No worries — how many people?", "ask_party"));
+    }
+    if (r.kind === "candidate") {
+      this.pendingParty = r.value;
+      return Promise.resolve(this.say(`${cap(numberWord(r.value))} people?`, "confirm_party"));
+    }
+    this.partyReasks++;
+    if (this.partyReasks >= 3) return this.beginEscalation();
+    return Promise.resolve(this.say(
+      `Just to check — ${numberWord(this.pendingParty ?? 0)} people? You can say yes, or the number.`,
+      "confirm_party",
+    ));
+  }
+
+  /** Graceful escalation (spec §5, §28, §31): stop looping, take a name + mobile
+   * for a staff call-back. Never a confirmed booking. */
   private beginEscalation(): Promise<ReservationTurn> {
     this.state = "ESCALATION";
     this.nameReasks = 0;
@@ -250,7 +443,7 @@ export class ReservationMachine {
   private async completeEscalation(): Promise<ReservationTurn> {
     this.state = "END";
     const phone = this.draft.phone ?? this.ctx.callerPhone ?? "unknown";
-    // A call-back request, NOT a confirmed booking (§31). Owner alerted to follow up.
+    // A call-back request, NOT a confirmed booking (spec §31). Owner alerted to follow up.
     if (this.ctx.ownerAlertNumber) {
       try {
         await enqueueNotification(this.ctx.db, {
@@ -268,14 +461,6 @@ export class ReservationMachine {
       "escalated",
       true,
     );
-  }
-
-  /** Mid-flow "actually make it five" corrections to party size. */
-  private applyPartyCorrection(text: string): void {
-    if (/\b(actually|make it|change to|no|sorry)\b/i.test(text)) {
-      const n = parsePartySize(text);
-      if (n) this.draft.partySize = n;
-    }
   }
 
   private async runAvailability(): Promise<ReservationTurn> {
@@ -339,7 +524,7 @@ export class ReservationMachine {
   }
 
   private collectContact(): Promise<ReservationTurn> {
-    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say("Great, that's available. What name should I put it under?", "ask_name")); }
+    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say("That time's free. What name should I put it under?", "ask_name")); }
     if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("And the best mobile number?", "ask_phone")); }
     return this.finaliseBooking();
   }
@@ -359,7 +544,13 @@ export class ReservationMachine {
     const phone = parsePhone(text);
     if (!phone) {
       this.phoneReasks++;
-      return Promise.resolve(this.say(this.phoneReasks === 1 ? "Sorry, could I get the mobile number again?" : "What's the best mobile number, digit by digit?", "ask_phone"));
+      if (this.phoneReasks >= 3) return this.beginEscalation();
+      return Promise.resolve(this.say(
+        this.phoneReasks === 1
+          ? "Sorry, could I get the mobile number again?"
+          : "You can say the mobile digit by digit, or tap it in on your keypad.",
+        this.phoneReasks === 1 ? "ask_phone" : "ask_phone_dtmf",
+      ));
     }
     this.draft.phone = phone;
     return this.finaliseBooking();
@@ -419,8 +610,9 @@ export class ReservationMachine {
     this.reservation = r;
     this.state = "CONFIRMED";
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
+    const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
     return this.say(
-      `Done. You're booked for ${r.partySize} on ${speakDate(r.reservationDate)} at ${speakTime(r.reservationTime.slice(0, 5))}, under ${r.customerName}. I'll text you a confirmation.`,
+      `Done. You're booked for ${r.partySize} ${when}, under ${r.customerName}. I'll text you a confirmation.`,
       "confirmed",
       true,
     );

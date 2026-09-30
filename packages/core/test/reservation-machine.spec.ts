@@ -172,6 +172,123 @@ describe("ReservationMachine — booking flow", () => {
     // party captured via correction -> goes straight to availability -> name
     expect(["ask_name", "ask_party"]).toContain(t.kind);
   });
+
+  // ------------------------------------------------------ the exact failed call
+
+  it("REPLAY of the reported failed call — 'About four' / 'Four' must NOT loop (spec §26)", async () => {
+    // Reproduces Kevin's transcript: today / about 8 PM / 'about four' / 'four'.
+    const m = await machine();
+    await m.next("I want to book a table");
+    const said: string[] = [];
+    let t = await m.next("today");
+    said.push(t.say);
+    expect(t.kind).toBe("ask_time");
+    t = await m.next("about 8 PM");
+    said.push(t.say);
+    expect(t.kind).toBe("ask_party");
+    // The line that used to loop five times:
+    t = await m.next("about four");
+    said.push(t.say);
+    // party is understood immediately -> availability -> name. NOT another party ask.
+    expect(t.kind).toBe("ask_name");
+    // And the assistant NEVER said "Sorry, how many people?" even once.
+    expect(said.join(" ")).not.toMatch(/sorry, how many/i);
+  });
+
+  it("STT returns the homophone 'for' -> confirms 'Four people?' -> yes -> books (spec §2, §8)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    let t = await m.next("for"); // STT wrote "for" for "four"
+    expect(t.kind).toBe("confirm_party");
+    expect(t.say).toMatch(/four people\?/i);
+    t = await m.next("yes");
+    expect(t.kind).toBe("ask_name"); // party resolved, moved on
+  });
+
+  it("candidate confirm accepts a corrected number instead of yes/no", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    let t = await m.next("for");
+    expect(t.kind).toBe("confirm_party");
+    t = await m.next("no, five"); // correct it during the confirm
+    expect(t.kind).toBe("ask_name");
+    // and it booked five, not four
+    t = await m.next("Kevin");
+    expect(m.reservation?.partySize).toBe(5);
+  });
+
+  it("'four or five' asks which, then books the chosen one (spec §23)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    let t = await m.next("four or five");
+    expect(t.say).toMatch(/four or five/i);
+    expect(t.kind).toBe("ask_party");
+    t = await m.next("five");
+    expect(t.kind).toBe("ask_name");
+    await m.next("Kevin");
+    expect(m.reservation?.partySize).toBe(5);
+  });
+
+  it("party recovery escalates strategy: reword -> keypad hint -> call-back (spec §5)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    const kinds: string[] = [];
+    kinds.push((await m.next("blah")).kind); // reword
+    kinds.push((await m.next("blah")).kind); // keypad hint
+    kinds.push((await m.next("blah")).kind); // call-back
+    expect(kinds).toEqual(["ask_party", "ask_party_dtmf", "escalate_name"]);
+  });
+
+  it("never repeats the identical party question twice in a row (spec §4)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    const first = (await m.next("eight")).say; // "How many people?"
+    const second = (await m.next("blah")).say; // reworded
+    const third = (await m.next("blah")).say; // keypad
+    expect(first).not.toBe(second);
+    expect(second).not.toBe(third);
+    // and none of the party prompts start with "Sorry" (spec §6)
+    for (const s of [first, second, third]) expect(s).not.toMatch(/^sorry/i);
+  });
+
+  it("a keypad digit answers the party question (DTMF fallback fed as text, spec §5)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    const t = await m.next("4"); // Twilio DTMF '4' arrives as the utterance "4"
+    expect(t.kind).toBe("ask_name");
+  });
+
+  it("accepts all details in one opener and jumps to availability (spec §14)", async () => {
+    const m = await machine();
+    const iso = DATE;
+    // Use an explicit date word + time + party in one sentence.
+    const t = await m.next(`a table for four tomorrow at eight`);
+    // date+party+time all captured -> straight to name (availability passed)
+    // (tomorrow relative to NOW; time 8 PM; party 4)
+    expect(["ask_name", "ask_phone", "confirmed"]).toContain(t.kind);
+    void iso;
+  });
+
+  it("gentleReprompt re-asks the current question without 'are you still there'", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight"); // now asking party
+    const rp = m.gentleReprompt();
+    expect(rp.toLowerCase()).toContain("how many");
+    expect(rp.toLowerCase()).not.toContain("still there");
+  });
 });
 
 describe("ReservationMachine — cancel & modify", () => {

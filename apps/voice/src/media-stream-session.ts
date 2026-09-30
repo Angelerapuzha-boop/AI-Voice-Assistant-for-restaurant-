@@ -288,6 +288,12 @@ export class MediaStreamSession {
   // transcript should return in a few hundred ms. If it hangs (live India call
   // 2026-09-22 saw a 35s stall = dead air), re-prompt instead of sitting silent.
   private sttStallTimer: ReturnType<typeof setTimeout> | null = null;
+  // DTMF (keypad) capture — the robust fallback when speech recognition can't
+  // catch a number or a phone digit (spec §5). Digits are buffered and flushed
+  // as one utterance on '#', or after a short inter-digit pause, so a single
+  // "4" and a full "0412345678" both work.
+  private dtmfBuffer = "";
+  private dtmfTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly ws: WebSocket,
@@ -393,6 +399,9 @@ export class MediaStreamSession {
       case "media":
         this.handleMedia((msg.media as { payload: string }).payload);
         break;
+      case "dtmf":
+        this.handleDtmf((msg.dtmf as { digit?: string })?.digit ?? "");
+        break;
       case "stop":
         await this.onClose();
         break;
@@ -497,7 +506,10 @@ export class MediaStreamSession {
     // Returning caller with a prior order (matched by caller ID, history on):
     // greet them back and offer "Same as last time?" — one "yep" reorders the
     // lot. New callers get the normal greeting. Never blocks the call on error.
-    let greeting = reservationMode ? this.resMachine!.opening() : settings.aiGreeting;
+    const recordNotice = env.RECORD_ALL_INBOUND.toLowerCase() === "true";
+    let greeting = reservationMode
+      ? this.resMachine!.opening({ recordingNotice: recordNotice })
+      : settings.aiGreeting;
     if (!reservationMode && this.agent) {
       try {
         if (callerNum) {
@@ -514,9 +526,9 @@ export class MediaStreamSession {
     }
 
     // When every inbound call is recorded, open with a brief consent notice
-    // (AU: callers must be told a call may be recorded). Test-number recordings
-    // are the caller's own consented calls, so they don't get the notice.
-    if (env.RECORD_ALL_INBOUND.toLowerCase() === "true") {
+    // (AU: callers must be told a call may be recorded). In reservations mode the
+    // notice is already folded into opening(); ordering prepends it here.
+    if (recordNotice && !reservationMode) {
       greeting = `Just so you know, this call may be recorded. ${greeting}`;
     }
 
@@ -546,7 +558,15 @@ export class MediaStreamSession {
       this.lastActivityAt = Date.now();
       if (this.idleNudges < IDLE_MAX_NUDGES) {
         this.idleNudges += 1;
-        const line = this.idleNudges === 1 ? "Sorry, are you still there?" : "Still there? What can I get you?";
+        // Spec §11: the FIRST recovery is a gentle re-ask of the current
+        // question — never "are you still there?", which reads as impatient.
+        // Only the SECOND, later nudge checks the caller is still on the line.
+        let line: string;
+        if (this.resMachine) {
+          line = this.idleNudges === 1 ? this.resMachine.gentleReprompt() : "Are you still there?";
+        } else {
+          line = this.idleNudges === 1 ? "Sorry, are you still there?" : "Still there? What can I get you?";
+        }
         void this.speak(line).catch(() => undefined);
         return;
       }
@@ -638,6 +658,39 @@ export class MediaStreamSession {
     }
   }
 
+  /** Keypad digit from Twilio. The robust fallback for a number/phone the STT
+   * can't catch (spec §5). Only the reservation brain uses it. */
+  private handleDtmf(digit: string): void {
+    if (this.closed || this.ending || !this.resMachine) return;
+    const d = digit.trim();
+    // Barge over any current prompt so the keypad entry is acted on immediately.
+    if (this.speaking) { this.stopSpeaking(); this.sendClear(); }
+    this.lastActivityAt = Date.now();
+    this.idleNudges = 0;
+    if (d === "#") { this.flushDtmf(); return; }
+    if (!/^[0-9*]$/.test(d)) return;
+    this.dtmfBuffer += d;
+    if (this.dtmfTimer) clearTimeout(this.dtmfTimer);
+    // A lone digit (party size) flushes quickly; a longer run (a phone number)
+    // coalesces until the caller pauses or presses '#'.
+    this.dtmfTimer = setTimeout(() => this.flushDtmf(), 1500);
+  }
+
+  private flushDtmf(): void {
+    if (this.dtmfTimer) { clearTimeout(this.dtmfTimer); this.dtmfTimer = null; }
+    const digits = this.dtmfBuffer.replace(/[*#]/g, "");
+    this.dtmfBuffer = "";
+    if (!digits || this.closed || this.ending || !this.resMachine) return;
+    // Only act on the keypad while we're collecting a number or phone — never
+    // let a stray press rewrite a date/time.
+    const st = this.resMachine.debug().state;
+    if (!["COLLECT_PARTY_SIZE", "CONFIRM_PARTY", "COLLECT_PHONE", "ESCALATION"].includes(st)) return;
+    this.deps.log("dtmf", { digits: digits.length, state: st });
+    this.awaitingReply = true;
+    this.segmentHandled = false;
+    this.enqueueTurn(digits, 0, "full");
+  }
+
   /** Re-prompt (instead of dead air) if the committed transcript never arrives. */
   private armSttStall(): void {
     if (this.sttStallTimer) clearTimeout(this.sttStallTimer);
@@ -648,7 +701,10 @@ export class MediaStreamSession {
       this.segmentHandled = true; // discard the late transcript if it ever arrives
       this.awaitingReply = false;
       this.lastActivityAt = Date.now();
-      void this.speak("Sorry, I didn't catch that — could you say that again?").catch(() => undefined);
+      const line = this.resMachine
+        ? this.resMachine.gentleReprompt()
+        : "Sorry, I didn't catch that — could you say that again?";
+      void this.speak(line).catch(() => undefined);
     }, 6000);
   }
 
@@ -870,6 +926,7 @@ export class MediaStreamSession {
     const db = getDb();
     this.abort = new AbortController();
     const turnStarted = Date.now();
+    const stateBefore = this.resMachine.debug();
     try {
       let turn: { say: string; kind: string; endCall?: boolean };
       try {
@@ -882,6 +939,7 @@ export class MediaStreamSession {
       }
       const speakText = (turn.say || "").trim();
       const turnMs = Date.now() - turnStarted;
+      const stateAfter = this.resMachine.debug();
       if (this.callId) {
         await appendTranscript(db, this.callId, { role: "caller", text, at: new Date().toISOString() });
         if (speakText) {
@@ -894,6 +952,19 @@ export class MediaStreamSession {
         await recordCallEvent(db, this.callId, feltGapMs > 8000 ? "slow_turn" : "turn_metrics", {
           turnMs, sttMs, ttfbMs, feltGapMs, kind: turn.kind,
           assistantWords: speakText ? speakText.split(/\s+/).length : 0,
+        });
+        // Spec §18: per-turn debug record for diagnosing any future failure.
+        // Internal only (call_events), never surfaced to the caller.
+        await recordCallEvent(db, this.callId, "res_turn", {
+          transcript: text,
+          stateBefore: stateBefore.state,
+          stateAfter: stateAfter.state,
+          draft: stateAfter.draft,
+          pendingParty: stateAfter.pendingParty ?? null,
+          reasks: stateAfter.reasks,
+          kind: turn.kind,
+          response: speakText,
+          endCall: Boolean(turn.endCall),
         });
       }
       if (turn.endCall) {
