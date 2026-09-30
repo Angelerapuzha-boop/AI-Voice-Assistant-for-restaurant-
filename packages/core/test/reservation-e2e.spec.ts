@@ -122,7 +122,9 @@ describe("reservation sweep — 100+ conversations, zero loops / false confirmat
       const label = `[${i}] party="${c.party.join(" / ")}" expect ${c.expected}`;
 
       if (!noConsecutiveRepeat(turns)) { failures.push(`${label}: repeated a question verbatim`); continue; }
-      if (last.kind !== "confirmed" || !last.endCall) { failures.push(`${label}: did not confirm (kind=${last.kind})`); continue; }
+      // Confirmed keeps the line open (same-call change/cancel), so it is NOT an
+      // endCall turn — assert the confirmation itself, backed by a real row below.
+      if (last.kind !== "confirmed") { failures.push(`${label}: did not confirm (kind=${last.kind})`); continue; }
       if (m.reservation?.partySize !== c.expected) { failures.push(`${label}: party ${m.reservation?.partySize} != ${c.expected}`); continue; }
       // §29: a "confirmed" must correspond to a REAL row (no false confirmation).
       const rows = await findReservations(db, ctx.restaurant.id, phone);

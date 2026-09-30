@@ -51,6 +51,7 @@ export type ReservationState =
   | "COLLECT_PHONE"
   | "CONFIRM_DETAILS"
   | "CONFIRMED"
+  | "POST_CONFIRM"
   | "FIND_BOOKING"
   | "CANCEL_CONFIRM"
   | "MODIFY_WHAT"
@@ -223,6 +224,7 @@ export class ReservationMachine {
       case "OFFER_ALTERNATIVES": return this.handleAlternatives(text);
       case "COLLECT_NAME": return this.handleName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
+      case "POST_CONFIRM": return this.handlePostConfirm(text);
       case "FIND_BOOKING": return this.handleFindBooking(text);
       case "CANCEL_CONFIRM": return this.handleCancelConfirm(text);
       case "MODIFY_WHAT": return this.handleModifyWhat(text);
@@ -680,14 +682,45 @@ export class ReservationMachine {
     // §44: confirm from the record the DB returned, not conversation variables.
     const r = created.reservation;
     this.reservation = r;
-    this.state = "CONFIRMED";
+    // Keep the line open so the caller can change or cancel in THIS call, rather
+    // than having to ring back if they change their mind.
+    this.state = "POST_CONFIRM";
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
     return this.say(
-      `Done. You're booked for ${r.partySize} ${when}, under ${r.customerName}. I'll text you a confirmation.`,
+      `Done. You're booked for ${r.partySize} ${when}, under ${r.customerName}. I'll text you a confirmation. Anything else, or are you all set?`,
       "confirmed",
-      true,
+      false,
     );
+  }
+
+  /** After a booking is confirmed we stay on the line: the caller can change or
+   * cancel it in the same call, or ring off. "No / that's all / thanks" keeps the
+   * booking and ends warmly; only an explicit cancel removes it. */
+  private async handlePostConfirm(text: string): Promise<ReservationTurn> {
+    const intent = detectIntent(text);
+    if (intent === "cancel" && this.reservation) {
+      const cancelled = await cancelReservation(this.ctx.db, this.reservation.id);
+      this.reservation = null; // net effect: no active booking
+      this.state = "END";
+      return this.say(
+        cancelled
+          ? "No worries, I've cancelled that booking. Thanks for calling."
+          : "That booking's already cancelled. Thanks for calling.",
+        "cancelled_same_call",
+        true,
+      );
+    }
+    if (intent === "modify" && this.reservation) {
+      this.candidates = [this.reservation];
+      this.pendingAction = "modify";
+      this.state = "MODIFY_WHAT";
+      return this.say("Sure — what would you like to change?", "modify_what");
+    }
+    // "no / that's all / all good / thanks / bye" (or anything unclear): the
+    // booking stands and we ring off politely.
+    this.state = "END";
+    return this.say("Lovely, you're all set. See you then.", "goodbye", true);
   }
 
   /** SMS confirmation generated from the stored reservation row (§43-44). */

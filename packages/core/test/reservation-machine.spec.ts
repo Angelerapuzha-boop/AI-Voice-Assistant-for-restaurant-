@@ -42,12 +42,18 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("confirmed");
     expect(t.say).toMatch(/booked for 4/i);
     expect(t.say).toMatch(/7 PM/);
-    expect(t.endCall).toBe(true);
+    // stays on the line so the caller can change or cancel in the same call
+    expect(t.endCall).toBe(false);
     expect(m.reservation?.status).toBe("CONFIRMED");
     expect(m.reservation?.customerName).toBe("Kevin");
     expect(m.reservation?.partySize).toBe(4);
     const saved = await findReservations(db, ctx.restaurant.id, "+61400555001");
     expect(saved.length).toBe(1);
+    // caller rings off -> booking stands, call ends
+    t = await m.next("no that's all");
+    expect(t.kind).toBe("goodbye");
+    expect(t.endCall).toBe(true);
+    expect((await findReservations(db, ctx.restaurant.id, "+61400555001")).length).toBe(1);
   });
 
   it("extracts date + party from the opener, still asks the time", async () => {
@@ -172,6 +178,44 @@ describe("ReservationMachine — booking flow", () => {
     let t = await m.next("seven, actually make it two");
     // party captured via correction -> goes straight to availability -> name
     expect(["ask_name", "ask_party"]).toContain(t.kind);
+  });
+
+  // ---------------------------------------------- change/cancel in the same call
+
+  it("lets the caller CANCEL in the same call right after booking", async () => {
+    const m = await machine();
+    await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
+    let t = await m.next("Kevin");
+    expect(t.kind).toBe("confirmed");
+    expect(t.endCall).toBe(false);
+    expect(t.say).toMatch(/anything else|all set/i);
+    t = await m.next("actually, cancel that");
+    expect(t.kind).toBe("cancelled_same_call");
+    expect(t.endCall).toBe(true);
+    expect(m.reservation).toBeNull();
+    expect((await findReservations(db, ctx.restaurant.id, "+61400555001")).length).toBe(0);
+  });
+
+  it("lets the caller CHANGE the booking in the same call", async () => {
+    const m = await machine();
+    await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
+    await m.next("Kevin");
+    let t = await m.next("can you change it");
+    expect(t.kind).toBe("modify_what");
+    t = await m.next("make it 6 people");
+    expect(t.kind).toBe("modified");
+    const rows = await findReservations(db, ctx.restaurant.id, "+61400555001");
+    expect(rows[0]!.partySize).toBe(6);
+  });
+
+  it("keeps the booking when the caller says that's all", async () => {
+    const m = await machine();
+    await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
+    await m.next("Kevin");
+    const t = await m.next("no that's all");
+    expect(t.kind).toBe("goodbye");
+    expect(t.endCall).toBe(true);
+    expect((await findReservations(db, ctx.restaurant.id, "+61400555001")).length).toBe(1);
   });
 
   // ------------------------------------------------------ the exact failed call
