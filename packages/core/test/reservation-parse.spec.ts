@@ -139,6 +139,12 @@ describe("parseName", () => {
     expect(parseName("put it under Sarah")).toBe("Sarah");
     expect(parseName("name's John Smith")).toBe("John Smith");
   });
+  it("handles polite lead-ins (live call c0b17598 regression)", () => {
+    expect(parseName("Can you put it under the name Kevin?")).toBe("Kevin");
+    expect(parseName("Uh, can you put it under the name Kevin?")).toBe("Kevin");
+    expect(parseName("could you put it down as Dave")).toBe("Dave");
+    expect(parseName("the name is Priya")).toBe("Priya");
+  });
   it("rejects junk", () => {
     expect(parseName("yes")).toBeNull();
     expect(parseName("um")).toBeNull();

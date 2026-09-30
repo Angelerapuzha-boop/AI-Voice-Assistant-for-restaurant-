@@ -608,7 +608,7 @@ export class ReservationMachine {
     if (!name) {
       this.nameReasks++;
       if (this.nameReasks >= 3) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say("Let's try again — what name should I put the table under?", "ask_name")); }
-      return Promise.resolve(this.say(this.nameReasks === 1 ? "Sorry, what name should I put it under?" : "What name for the table?", "ask_name"));
+      return Promise.resolve(this.say(this.nameReasks === 1 ? "I didn't catch the name — just a first name's fine." : "And what name's the booking under?", "ask_name"));
     }
     this.draft.name = name;
     return this.collectContact();

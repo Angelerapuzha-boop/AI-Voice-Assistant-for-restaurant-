@@ -275,22 +275,35 @@ const NON_NAME = new Set([
  * "the name's Dave", "put it under Dave"). Returns null if it isn't a plausible
  * name (so the machine re-asks rather than storing junk).
  */
+// Residual non-name words left after lead-in stripping ("can you the Kevin" ->
+// "Kevin"). Live call c0b17598: "can you put it under the name Kevin" left
+// "can you the Kevin" (4 words) and was rejected — these get filtered out.
+const NAME_FILLER = new Set([
+  "the", "a", "an", "to", "my", "you", "i", "it", "is", "of", "and", "just",
+  "can", "could", "would", "please", "put", "down", "as", "for", "under", "name",
+]);
+
 export function parseName(text: string): string | null {
   let t = text.trim().replace(/[.,!?]/g, "");
   t = t.replace(
     /^(?:yeah|yep|yup|nah|no|um|uh|ah|oh|so|well|ok|okay)[,\s]+/i,
     "",
   );
+  // Strip polite / lead-in phrases anywhere ("can you put it under the name X",
+  // "could you put it down as X", "the name's X", "it's X").
   t = t.replace(
-    /\b(?:my name is|the name is|name'?s|name|it'?s|its|it is|this is|i'?m|i am|call me|put it under|put it down|under|for)\b/gi,
+    /\b(?:can you|could you|would you|can i|could i|my name is|the name is|the name'?s|the name|a name|name'?s|name|it'?s|its|it is|this is|i'?m|i am|call me|put it under|put it down|put me down|put it|put me|down as|down|under|as|for)\b/gi,
     " ",
   );
   t = t.replace(/[^a-zA-Z\s'-]/g, " ").replace(/\s+/g, " ").trim();
-  const words = t.split(" ").filter(Boolean);
+  let words = t.split(" ").filter(Boolean);
+  // Drop any residual connective/filler words, keeping the actual name tokens.
+  words = words.filter((w) => !NAME_FILLER.has(w.toLowerCase()));
   if (words.length < 1 || words.length > 3) return null;
   if (words.some((w) => NON_NAME.has(w.toLowerCase()))) return null;
   if (words.every((w) => w.replace(/[^a-z]/gi, "").length <= 1)) return null;
-  if (t.length < 2 || t.length > 40) return null;
+  const joined = words.join(" ");
+  if (joined.length < 2 || joined.length > 40) return null;
   return words.map((w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
