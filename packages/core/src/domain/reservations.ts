@@ -225,10 +225,20 @@ async function genUniqueRef(tx: Queryable, restaurantId: string, prefix: string)
   return `${prefix}${Date.now().toString().slice(-6)}`;
 }
 
+/** Thrown when the slot filled between the availability check and creation
+ * (spec §7). The caller offers alternatives instead of confirming. */
+export class ReservationCapacityError extends Error {
+  constructor() {
+    super("SLOT_FULL");
+    this.name = "ReservationCapacityError";
+  }
+}
+
 /**
- * Atomically create a reservation. Idempotent on idempotencyKey, and the
- * no-dup-active index means an accidental double-submit returns the existing
- * booking rather than a second row (spec §5).
+ * Atomically create a reservation. Idempotent on idempotencyKey; the
+ * no-dup-active index collapses accidental double-submits; and capacity is
+ * REVALIDATED atomically under a per-(restaurant,date) advisory lock so two
+ * callers can't both take the last covers between check and create (spec §6-7).
  */
 export async function createReservation(
   db: pg.Pool,
@@ -252,6 +262,21 @@ export async function createReservation(
       [input.restaurantId, input.customerPhone, input.date, `${input.time}:00`, input.partySize],
     );
     if (dupPre.rows[0]) return { reservation: camelRow<Reservation>(dupPre.rows[0]), duplicate: true };
+
+    // Race-safe capacity (§6-7): serialise creates for this restaurant+date, then
+    // re-check the slot's covers atomically before inserting. Prevents two
+    // callers both taking the last seats on stale availability.
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${input.restaurantId}:${input.date}`]);
+    const slot = await tx.query(
+      `SELECT reservation_time, party_size FROM reservations
+        WHERE restaurant_id = $1 AND reservation_date = $2 AND status = 'CONFIRMED'`,
+      [input.restaurantId, input.date],
+    );
+    const reqMin = toMinutes(`${input.time}:00`);
+    const covers = slot.rows
+      .filter((r) => Math.abs(toMinutes(String(r.reservation_time)) - reqMin) < settings.turnoverMinutes)
+      .reduce((sum, r) => sum + Number(r.party_size), 0);
+    if (covers + input.partySize > settings.maxCoversPerSlot) throw new ReservationCapacityError();
 
     const ref = await genUniqueRef(tx, input.restaurantId, settings.refPrefix);
     // Savepoint so a race that hits the unique index can be recovered without

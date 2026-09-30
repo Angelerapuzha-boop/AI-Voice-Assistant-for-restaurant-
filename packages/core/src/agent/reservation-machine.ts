@@ -6,7 +6,9 @@ import {
   createReservation,
   findReservations,
   modifyReservation,
+  ReservationCapacityError,
 } from "../domain/reservations";
+import { enqueueNotification } from "../domain/notifications";
 import { normaliseDate, normaliseTime } from "../domain/reservation-time";
 import {
   detectIntent,
@@ -28,6 +30,7 @@ export interface ReservationContext {
   now: () => Date;
   callerPhone?: string;
   callId?: string;
+  customerSmsEnabled?: boolean;
 }
 
 export type ReservationState =
@@ -302,21 +305,77 @@ export class ReservationMachine {
   private async finaliseBooking(): Promise<ReservationTurn> {
     const phone = this.draft.phone ?? this.ctx.callerPhone!;
     const { date, time, partySize, name } = this.draft;
-    // Idempotency key so a retried/duplicated finalise can't double-book.
+    // Idempotency key so a retried/duplicated finalise can't double-book (§8).
     const idempotencyKey = `${this.ctx.callId ?? phone}:${date}:${time}:${partySize}`;
-    const { reservation } = await createReservation(this.ctx.db, {
+    const input = {
       restaurantId: this.ctx.restaurantId, customerName: name!, customerPhone: phone,
       date: date!, time: time!, partySize: partySize!, source: "phone",
       callId: this.ctx.callId ?? null, idempotencyKey,
       specialRequests: this.draft.specialRequests ?? "",
-    });
-    this.reservation = reservation;
+    };
+
+    let created;
+    try {
+      created = await createReservation(this.ctx.db, input);
+    } catch (err) {
+      if (err instanceof ReservationCapacityError) {
+        // §7: the slot filled between check and create — offer alternatives, never confirm.
+        const avail = await checkAvailability({
+          db: this.ctx.db, restaurantId: this.ctx.restaurantId, hours: this.ctx.hours,
+          settings: this.ctx.settings, timezone: this.ctx.timezone, now: this.ctx.now(),
+          date: date!, time: time!, partySize: partySize!,
+        });
+        if (avail.status === "ALTERNATIVES_AVAILABLE" && avail.alternatives.length) {
+          this.altTimes = avail.alternatives;
+          this.state = "OFFER_ALTERNATIVES";
+          return this.say(
+            `Sorry, that spot's just gone — but I've got ${avail.alternatives.slice(0, 2).map(speakTime).join(" or ")}. Would either work?`,
+            "capacity_gone",
+          );
+        }
+        this.draft.time = undefined;
+        this.state = "COLLECT_TIME";
+        return this.say("Sorry, that spot's just gone. What other time would suit?", "capacity_gone");
+      }
+      // §30: one safe automatic retry (same idempotency key so it can't double-book).
+      try {
+        created = await createReservation(this.ctx.db, input);
+      } catch {
+        // §31: fail-safe — never pretend a booking exists.
+        this.state = "END";
+        return this.say(
+          "Sorry, I'm having trouble confirming that right now. I'll take your details and the team will follow it up.",
+          "booking_failed",
+          true,
+        );
+      }
+    }
+
+    // §44: confirm from the record the DB returned, not conversation variables.
+    const r = created.reservation;
+    this.reservation = r;
     this.state = "CONFIRMED";
+    void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     return this.say(
-      `Done. You're booked for ${partySize} on ${speakDate(date!)} at ${speakTime(time!)}, under ${name}. I'll text you a confirmation.`,
+      `Done. You're booked for ${r.partySize} on ${speakDate(r.reservationDate)} at ${speakTime(r.reservationTime.slice(0, 5))}, under ${r.customerName}. I'll text you a confirmation.`,
       "confirmed",
       true,
     );
+  }
+
+  /** SMS confirmation generated from the stored reservation row (§43-44). */
+  private async sendConfirmationSms(r: Reservation): Promise<void> {
+    if (!this.ctx.customerSmsEnabled || !r.customerPhone.startsWith("+")) return;
+    try {
+      await enqueueNotification(this.ctx.db, {
+        orderId: null,
+        kind: "customer_sms",
+        toNumber: r.customerPhone,
+        body: `${this.ctx.restaurantName}: booking confirmed for ${r.partySize} on ${speakDate(r.reservationDate)} at ${speakTime(r.reservationTime.slice(0, 5))}, under ${r.customerName}. Ref ${r.publicRef}.`,
+      });
+    } catch {
+      /* SMS is best-effort — a failed enqueue must never affect the confirmed booking */
+    }
   }
 
   // ------------------------------------------------------------ find / cancel / modify

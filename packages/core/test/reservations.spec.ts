@@ -8,6 +8,7 @@ import {
   getReservationByRef,
   getReservationSettings,
   modifyReservation,
+  ReservationCapacityError,
 } from "../src/domain/reservations";
 import { normaliseDate } from "../src/domain/reservation-time";
 import { resetTransactionalData, setupTestDb, type TestContext } from "./helpers";
@@ -105,6 +106,25 @@ describe("createReservation", () => {
     });
     expect(b.duplicate).toBe(true);
     expect(b.reservation.id).toBe(a.reservation.id);
+  });
+
+  it("refuses to create over capacity atomically (throws ReservationCapacityError) — §7", async () => {
+    await db.query(`UPDATE reservation_settings SET max_covers_per_slot = 4, turnover_minutes = 90`);
+    await createReservation(db, {
+      restaurantId: ctx.restaurant.id, customerName: "A", customerPhone: "+61400777001",
+      date: DATE, time: "19:00", partySize: 4,
+    });
+    await expect(
+      createReservation(db, {
+        restaurantId: ctx.restaurant.id, customerName: "B", customerPhone: "+61400777002",
+        date: DATE, time: "19:00", partySize: 2,
+      }),
+    ).rejects.toBeInstanceOf(ReservationCapacityError);
+    // and no over-capacity row was written
+    const rows = await db.query(
+      `SELECT count(*) FROM reservations WHERE reservation_date=$1 AND status='CONFIRMED'`, [DATE],
+    );
+    expect(Number(rows.rows[0]!.count)).toBe(1);
   });
 
   it("dedups an accidental exact-duplicate active booking (no idempotency key)", async () => {

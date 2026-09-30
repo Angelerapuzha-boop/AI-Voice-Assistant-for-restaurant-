@@ -457,6 +457,7 @@ export class MediaStreamSession {
         now: this.deps.now ?? (() => new Date()),
         callerPhone: callerNum || undefined,
         callId: call.id,
+        customerSmsEnabled: settings.customerSmsEnabled,
       });
     } else {
       let llm: Llm;

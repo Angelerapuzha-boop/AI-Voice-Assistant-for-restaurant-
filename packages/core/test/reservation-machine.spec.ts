@@ -78,6 +78,29 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("ask_name");
   });
 
+  it("enqueues a customer SMS from the stored record when SMS is enabled (§43)", async () => {
+    const rc: ReservationContext = {
+      db, restaurantId: ctx.restaurant.id, restaurantName: "Meat Box", hours: ctx.hours,
+      settings: await getReservationSettings(db, ctx.restaurant.id), timezone: TZ,
+      now: () => NOW, callerPhone: "+61400556001", customerSmsEnabled: true,
+    };
+    const m = new ReservationMachine(rc);
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    await m.next("four");
+    const t = await m.next("Kevin");
+    expect(t.kind).toBe("confirmed");
+    // SMS is fire-and-forget; give the enqueue a moment.
+    await new Promise((r) => setTimeout(r, 100));
+    const sms = await db.query(
+      `SELECT kind, to_number, body FROM notification_attempts WHERE kind='customer_sms' ORDER BY created_at DESC LIMIT 1`,
+    );
+    expect(sms.rows[0]?.kind).toBe("customer_sms");
+    expect(String(sms.rows[0]?.body)).toMatch(/booking confirmed/i);
+    expect(String(sms.rows[0]?.to_number)).toBe("+61400556001");
+  });
+
   it("declines a food order and steers back to booking", async () => {
     const m = await machine();
     const t = await m.next("I want to order two burgers");
