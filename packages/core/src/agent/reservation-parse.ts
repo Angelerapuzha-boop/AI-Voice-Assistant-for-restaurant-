@@ -56,13 +56,36 @@ export function isFoodOrderAttempt(text: string): boolean {
  * Extract a party size. Handles "four", "for 4", "party of six", "table for 2",
  * "just the two of us", "me and my wife" (2), "4 people". Returns null if none.
  */
+const PARTY_FILLER = new Set([
+  "about", "around", "like", "um", "uh", "er", "maybe", "roughly", "approximately",
+  "ish", "just", "people", "persons", "guests", "pax", "adults", "heads", "covers",
+  "seats", "of", "us", "a", "the", "party", "group", "table", "booking", "for",
+  "please", "thanks", "yeah", "yes", "so", "well", "and",
+]);
+
+const toNum = (raw: string): number | null => {
+  const n = /^\d+$/.test(raw) ? Number(raw) : NUM_WORDS[raw];
+  return n && Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
+};
+
+/**
+ * Extract a party size. Handles "four", "for 4", "party of six", "just the two
+ * of us", "4 people", punctuation ("Four."), and STT rendering spoken numbers as
+ * TIMES ("4:00" -> 4, "12:00" -> 12) which is common on the phone. Returns null
+ * if no clear count.
+ */
 export function parsePartySize(text: string): number | null {
-  const t = normalise(text);
+  // "4:00"/"12:00" -> "4"/"12" (STT often writes a spoken count as a time),
+  // then strip punctuation so "Four." / "4," parse.
+  const t = normalise(text)
+    .replace(/\b(\d{1,2}):00\b/g, "$1")
+    .replace(/[.:'\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!t) return null;
   if (/\b(just )?(me|myself) (and|&) (my )?(wife|husband|partner|mate|friend|mrs|missus)\b/.test(t)) return 2;
   if (/\bjust me\b|\bmyself\b|\bfor one\b|\bone person\b/.test(t)) return 1;
 
-  // "party of N", "group of N", "for N", "table for N", "N people/guests/pax"
   const patterns = [
     /\b(?:party|group|table|booking)\s+(?:of|for)\s+([a-z0-9]+)\b/,
     /\bfor\s+([a-z0-9]+)\b/,
@@ -72,10 +95,16 @@ export function parsePartySize(text: string): number | null {
   for (const re of patterns) {
     const m = t.match(re);
     if (m) {
-      const raw = m[1]!;
-      const n = /^\d+$/.test(raw) ? Number(raw) : NUM_WORDS[raw];
-      if (n && Number.isInteger(n) && n >= 1 && n <= 100) return n;
+      const n = toNum(m[1]!);
+      if (n) return n;
     }
+  }
+  // Fallback: after dropping filler words, a single number token IS the count
+  // ("about four" -> 4, "4:00" -> 4, "twelve" -> 12).
+  const toks = t.split(" ").filter((w) => w && !PARTY_FILLER.has(w));
+  if (toks.length === 1) {
+    const n = toNum(toks[0]!);
+    if (n) return n;
   }
   return null;
 }

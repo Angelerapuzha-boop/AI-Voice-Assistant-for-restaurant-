@@ -458,6 +458,7 @@ export class MediaStreamSession {
         callerPhone: callerNum || undefined,
         callId: call.id,
         customerSmsEnabled: settings.customerSmsEnabled,
+        ownerAlertNumber: this.ownerAlertNumber,
       });
     } else {
       let llm: Llm;

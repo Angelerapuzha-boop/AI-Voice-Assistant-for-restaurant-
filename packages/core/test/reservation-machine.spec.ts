@@ -138,6 +138,32 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.say).toMatch(/booked out/i);
   });
 
+  it("captures party from an STT time-rendering '4:00' and a trailing period (live call 8d55f5f8)", async () => {
+    for (const partyText of ["4:00", "Four.", "about four", "4:00."]) {
+      const m = await machine();
+      await m.next("book a table");
+      await m.next(DATE);
+      await m.next("eight");
+      const t = await m.next(partyText);
+      expect(t.kind, partyText).toBe("ask_name"); // party captured -> availability OK -> ask name
+    }
+  });
+
+  it("escalates after 3 unparseable party answers instead of looping (§27/§28)", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("eight");
+    await m.next("blah");
+    await m.next("blah");
+    const t = await m.next("blah");
+    expect(t.kind).toBe("escalate_name");
+    // and completing escalation never claims a booking
+    const done = await m.next("Kevin");
+    expect(done.kind).toBe("escalated");
+    expect(m.reservation).toBeNull();
+  });
+
   it("handles a party correction mid-flow", async () => {
     const m = await machine();
     await m.next("book a table");

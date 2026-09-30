@@ -31,6 +31,7 @@ export interface ReservationContext {
   callerPhone?: string;
   callId?: string;
   customerSmsEnabled?: boolean;
+  ownerAlertNumber?: string;
 }
 
 export type ReservationState =
@@ -104,6 +105,11 @@ export class ReservationMachine {
   private altTimes: string[] = [];
   private nameReasks = 0;
   private phoneReasks = 0;
+  private dateReasks = 0;
+  private timeReasks = 0;
+  private partyReasks = 0;
+  /** After escalation we collect name then phone for a call-back request. */
+  private escalationReason = "";
 
   constructor(private ctx: ReservationContext) {}
 
@@ -136,6 +142,7 @@ export class ReservationMachine {
       case "FIND_BOOKING": return this.handleFindBooking(text);
       case "CANCEL_CONFIRM": return this.handleCancelConfirm(text);
       case "MODIFY_WHAT": return this.handleModifyWhat(text);
+      case "ESCALATION": return this.handleEscalation(text);
       default: return this.say("Did you want to book, change or cancel a table?", "reprompt");
     }
   }
@@ -184,27 +191,83 @@ export class ReservationMachine {
     const r = normaliseDate(text, {
       now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
     });
+    if (r.date) { this.dateReasks = 0; this.draft.date = r.date; return this.advanceBooking(); }
+    this.dateReasks++;
+    if (this.dateReasks >= 3) return this.beginEscalation();
     if (r.error === "PAST") return Promise.resolve(this.say("That day's already passed — what day would you like?", "ask_date"));
-    if (r.error === "TOO_FAR") return Promise.resolve(this.say("That's a bit too far ahead to book — what day would you like?", "ask_date"));
-    if (!r.date) return Promise.resolve(this.say("Sorry, what day would you like the table?", "ask_date"));
-    this.draft.date = r.date;
-    return this.advanceBooking();
+    if (r.error === "TOO_FAR") return Promise.resolve(this.say("That's a bit too far ahead — what day would you like?", "ask_date"));
+    return Promise.resolve(this.say(this.dateReasks === 1 ? "Sorry, what day would you like the table?" : "Which day would suit — a weekday or the weekend?", "ask_date"));
   }
 
   private handleTime(text: string): Promise<ReservationTurn> {
     // Allow a correction that also changes the party ("actually make it five").
     this.applyPartyCorrection(text);
     const r = normaliseTime(text);
-    if (!r.time) return Promise.resolve(this.say("Sorry, what time were you after?", "ask_time"));
-    this.draft.time = r.time;
-    return this.advanceBooking();
+    if (r.time) { this.timeReasks = 0; this.draft.time = r.time; return this.advanceBooking(); }
+    this.timeReasks++;
+    if (this.timeReasks >= 3) return this.beginEscalation();
+    return Promise.resolve(this.say(this.timeReasks === 1 ? "Sorry, what time were you after?" : "What time — like six, seven or eight?", "ask_time"));
   }
 
   private handleParty(text: string): Promise<ReservationTurn> {
     const n = parsePartySize(text);
-    if (!n) return Promise.resolve(this.say("Sorry, how many people?", "ask_party"));
-    this.draft.partySize = n;
-    return this.advanceBooking();
+    if (n) { this.partyReasks = 0; this.draft.partySize = n; return this.advanceBooking(); }
+    this.partyReasks++;
+    if (this.partyReasks >= 3) return this.beginEscalation();
+    return Promise.resolve(this.say(this.partyReasks === 1 ? "Sorry, how many people?" : "Just the number of guests, thanks?", "ask_party"));
+  }
+
+  /** Graceful escalation (§28): stop looping, take a name + mobile for a call-back
+   * request. Never a confirmed booking (§31). */
+  private beginEscalation(): Promise<ReservationTurn> {
+    this.state = "ESCALATION";
+    this.nameReasks = 0;
+    this.phoneReasks = 0;
+    if (!this.draft.name) {
+      return Promise.resolve(this.say("No worries — I'll get the team to sort it. What name should I put it under?", "escalate_name"));
+    }
+    if (!this.draft.phone && !this.ctx.callerPhone) {
+      return Promise.resolve(this.say("And the best mobile number?", "escalate_phone"));
+    }
+    return this.completeEscalation();
+  }
+
+  private async handleEscalation(text: string): Promise<ReservationTurn> {
+    if (!this.draft.name) {
+      const name = parseName(text);
+      if (name) this.draft.name = name;
+      else if (++this.nameReasks >= 2) this.draft.name = "Guest";
+      else return this.say("Sorry, what name should I put it under?", "escalate_name");
+    }
+    if (this.draft.name && !this.draft.phone && !this.ctx.callerPhone) {
+      const phone = parsePhone(text);
+      if (phone) this.draft.phone = phone;
+      else if (++this.phoneReasks < 2) return this.say("What's the best mobile number, digit by digit?", "escalate_phone");
+    }
+    return this.completeEscalation();
+  }
+
+  private async completeEscalation(): Promise<ReservationTurn> {
+    this.state = "END";
+    const phone = this.draft.phone ?? this.ctx.callerPhone ?? "unknown";
+    // A call-back request, NOT a confirmed booking (§31). Owner alerted to follow up.
+    if (this.ctx.ownerAlertNumber) {
+      try {
+        await enqueueNotification(this.ctx.db, {
+          orderId: null,
+          kind: "owner_sms",
+          toNumber: this.ctx.ownerAlertNumber,
+          body: `${this.ctx.restaurantName}: table-booking request to confirm — ${this.draft.name ?? "caller"}, ${this.draft.partySize ?? "?"} people, ${this.draft.date ?? "?"} ${this.draft.time ?? ""}, ph ${phone}. Please call back.`,
+        });
+      } catch {
+        /* owner alert is best-effort */
+      }
+    }
+    return this.say(
+      "No worries — I've taken your details and the team will confirm the table and call you back shortly. Thanks for calling.",
+      "escalated",
+      true,
+    );
   }
 
   /** Mid-flow "actually make it five" corrections to party size. */
