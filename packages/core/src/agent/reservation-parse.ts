@@ -31,7 +31,7 @@ const FOOD_RE =
 const CANCEL_RE = /\b(cancel|scrap|delete|get rid of)\b/;
 const MODIFY_RE = /\b(change|modify|move|reschedule|update|push (?:it )?back|bring (?:it )?forward|make it)\b/;
 const CONFIRM_EXISTING_RE = /\b(confirm|check|verify|still (?:on|booked)|do i have)\b.*\b(booking|reservation|table)\b/;
-const BOOK_RE = /\b(book|reserve|reservation|booking|table|get us in|fit us in|dinner|lunch)\b/;
+const BOOK_RE = /\b(book|reserve|reservation|booking|table|seat|seats|seating|get us in|fit us in|dinner|lunch|dine in|dine-in)\b/;
 
 /** Classify the caller's high-level intent (deterministic first pass). */
 export function detectIntent(text: string): ReservationIntent {
@@ -66,7 +66,7 @@ export function parsePartySize(text: string): number | null {
   const patterns = [
     /\b(?:party|group|table|booking)\s+(?:of|for)\s+([a-z0-9]+)\b/,
     /\bfor\s+([a-z0-9]+)\b/,
-    /\b([a-z0-9]+)\s+(?:people|persons|guests|pax|of us|adults|heads|covers)\b/,
+    /\b([a-z0-9]+)\s+(?:people|persons|guests|pax|of us|adults|heads|covers|seats)\b/,
     /^([a-z0-9]+)$/,
   ];
   for (const re of patterns) {

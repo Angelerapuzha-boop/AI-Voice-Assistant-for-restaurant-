@@ -68,6 +68,16 @@ describe("ReservationMachine — booking flow", () => {
     expect(m.reservation?.customerPhone).toBe("+61412345678");
   });
 
+  it("handles 'seat reservation' phrasing", async () => {
+    const m = await machine();
+    let t = await m.next("I'd like to reserve a seat");
+    expect(t.kind).toBe("ask_date");
+    t = await m.next(DATE);
+    t = await m.next("seven");
+    t = await m.next("seats for two");
+    expect(t.kind).toBe("ask_name");
+  });
+
   it("declines a food order and steers back to booking", async () => {
     const m = await machine();
     const t = await m.next("I want to order two burgers");
