@@ -3,6 +3,12 @@ import { env } from "../env";
 
 const { Pool } = pg;
 
+// Return DATE columns (OID 1082) as raw "YYYY-MM-DD" strings, not JS Date
+// objects. node-postgres otherwise parses `date` to a local-midnight Date, which
+// shifts across timezones; reservation logic is entirely string-based on ISO
+// dates. Only reservation_date uses the `date` type, so this is safe app-wide.
+pg.types.setTypeParser(1082, (v) => v);
+
 export type Db = pg.Pool;
 export type DbClient = pg.PoolClient;
 

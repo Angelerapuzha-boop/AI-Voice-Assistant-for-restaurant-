@@ -36,6 +36,13 @@ export async function seed(db: pg.Pool): Promise<{ restaurantId: string; created
       [restaurantId, env.OWNER_NOTIFICATION_PHONE],
     );
 
+    // Reservation configuration (simple covers-per-slot model to start).
+    await client.query(
+      `INSERT INTO reservation_settings (restaurant_id)
+       VALUES ($1) ON CONFLICT (restaurant_id) DO NOTHING`,
+      [restaurantId],
+    );
+
     // Real trading hours from meatboxwa.com.au (2026-09-09): 5:00pm – 1:00am daily.
     for (let day = 0; day < 7; day++) {
       await client.query(

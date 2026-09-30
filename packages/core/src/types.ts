@@ -251,6 +251,42 @@ export interface User {
   active: boolean;
 }
 
+export type ReservationStatus = "CONFIRMED" | "CANCELLED" | "COMPLETED" | "NO_SHOW";
+
+export interface Reservation {
+  id: string;
+  restaurantId: string;
+  publicRef: string;
+  customerName: string;
+  customerPhone: string;
+  reservationDate: string; // YYYY-MM-DD
+  reservationTime: string; // HH:MM:SS
+  partySize: number;
+  status: ReservationStatus;
+  specialRequests: string;
+  highChair: boolean;
+  accessibility: boolean;
+  occasion: string;
+  seatingPref: "" | "indoor" | "outdoor";
+  source: string;
+  callId: string | null;
+  idempotencyKey: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ReservationSettings {
+  restaurantId: string;
+  reservationsEnabled: boolean;
+  maxCoversPerSlot: number;
+  maxPartySize: number;
+  slotIntervalMinutes: number;
+  turnoverMinutes: number;
+  minAdvanceMinutes: number;
+  maxAdvanceDays: number;
+  refPrefix: string;
+}
+
 /** Generic snake_case DB row -> camelCase object mapper. */
 export function camelRow<T>(row: Record<string, unknown>): T {
   const out: Record<string, unknown> = {};

@@ -28,9 +28,15 @@ export async function setupTestDb(): Promise<TestContext> {
 export async function resetTransactionalData(db: pg.Pool): Promise<void> {
   await db.query(
     `TRUNCATE order_item_modifiers, order_items, notification_attempts, call_events, orders, calls,
-             kiosk_lookup_failures CASCADE`,
+             kiosk_lookup_failures, reservation_audit, reservations CASCADE`,
   );
   await db.query(`UPDATE daily_specials SET quantity_used = 0`);
+  // Reset reservation settings to defaults so capacity tests start from a known state.
+  await db.query(
+    `UPDATE reservation_settings SET reservations_enabled = true, max_covers_per_slot = 20,
+       max_party_size = 10, slot_interval_minutes = 15, turnover_minutes = 90,
+       min_advance_minutes = 30, max_advance_days = 120`,
+  );
 }
 
 export async function findItemByName(db: pg.Pool, name: string): Promise<{ id: string }> {

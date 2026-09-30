@@ -10,6 +10,8 @@ export * from "./domain/menu";
 export * from "./domain/specials";
 export * from "./domain/settings";
 export * from "./domain/orders";
+export * from "./domain/reservations";
+export * from "./domain/reservation-time";
 export * from "./domain/notifications";
 export * from "./domain/webhooks";
 export * from "./domain/square";
