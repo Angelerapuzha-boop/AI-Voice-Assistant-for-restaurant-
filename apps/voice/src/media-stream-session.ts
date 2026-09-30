@@ -17,6 +17,8 @@ import {
   markNeedsReview,
   OrderAgent,
   recordCallEvent,
+  ReservationMachine,
+  getReservationSettings,
   startCall,
   type CallOutcome,
   type Llm,
@@ -244,6 +246,7 @@ export class MediaStreamSession {
   private streamSid = "";
   private callId: string | null = null;
   private agent: OrderAgent | null = null;
+  private resMachine: ReservationMachine | null = null;
   private scribe: SttStream | null = null;
   private abort: AbortController | null = null;
   private speaking: SallyStream | null = null;
@@ -437,28 +440,46 @@ export class MediaStreamSession {
     });
     this.callId = call.id;
 
-    let llm: Llm;
-    try {
-      llm = this.deps.createLlm(settings.aiModel || undefined);
-    } catch (err) {
-      this.deps.log("LLM unavailable", { error: (err as Error).message });
-      await this.speak("Sorry, our ordering assistant isn't available right now. Please call back shortly.");
-      await endCall(db, call.id, { status: "failed", outcome: "NO_ORDER" });
-      return;
-    }
-
     this.ownerAlertNumber = settings.ownerSmsNumber || env.OWNER_NOTIFICATION_PHONE || "";
-    this.agent = new OrderAgent(llm, {
-      db,
-      restaurant,
-      settings,
-      hours,
-      callId: call.id,
-      callerNumber: from && !from.startsWith("client:") ? from : undefined,
-      now: this.deps.now ?? (() => new Date()),
-      menuCatalog,
-    });
-    void this.agent.prewarm();
+    const reservationMode = env.BUSINESS_MODE === "reservations";
+    const callerNum = from && !from.startsWith("client:") ? from : "";
+
+    if (reservationMode) {
+      // Deterministic table-reservation brain — no per-turn LLM needed.
+      const reservationSettings = await getReservationSettings(db, restaurant.id);
+      this.resMachine = new ReservationMachine({
+        db,
+        restaurantId: restaurant.id,
+        restaurantName: restaurant.name,
+        hours,
+        settings: reservationSettings,
+        timezone: restaurant.timezone,
+        now: this.deps.now ?? (() => new Date()),
+        callerPhone: callerNum || undefined,
+        callId: call.id,
+      });
+    } else {
+      let llm: Llm;
+      try {
+        llm = this.deps.createLlm(settings.aiModel || undefined);
+      } catch (err) {
+        this.deps.log("LLM unavailable", { error: (err as Error).message });
+        await this.speak("Sorry, our ordering assistant isn't available right now. Please call back shortly.");
+        await endCall(db, call.id, { status: "failed", outcome: "NO_ORDER" });
+        return;
+      }
+      this.agent = new OrderAgent(llm, {
+        db,
+        restaurant,
+        settings,
+        hours,
+        callId: call.id,
+        callerNumber: callerNum || undefined,
+        now: this.deps.now ?? (() => new Date()),
+        menuCatalog,
+      });
+      void this.agent.prewarm();
+    }
 
     // Our own STT for the whole call, biased toward the menu vocabulary.
     this.scribe = openStt(
@@ -474,19 +495,20 @@ export class MediaStreamSession {
     // Returning caller with a prior order (matched by caller ID, history on):
     // greet them back and offer "Same as last time?" — one "yep" reorders the
     // lot. New callers get the normal greeting. Never blocks the call on error.
-    let greeting = settings.aiGreeting;
-    const callerNum = from && !from.startsWith("client:") ? from : "";
-    try {
-      if (callerNum) {
-        const last = await getLastOrderForPhone(db, restaurant.id, callerNum);
-        if (last && last.order.items.length > 0) {
-          greeting = "Welcome back to Meat Box! Same as last time?";
-          this.agent.state.repeatOffered = true;
-          this.agent.state.lastAssistantText = greeting;
+    let greeting = reservationMode ? this.resMachine!.opening() : settings.aiGreeting;
+    if (!reservationMode && this.agent) {
+      try {
+        if (callerNum) {
+          const last = await getLastOrderForPhone(db, restaurant.id, callerNum);
+          if (last && last.order.items.length > 0) {
+            greeting = "Welcome back to Meat Box! Same as last time?";
+            this.agent.state.repeatOffered = true;
+            this.agent.state.lastAssistantText = greeting;
+          }
         }
+      } catch (err) {
+        this.deps.log("repeat lookup failed", { error: (err as Error).message });
       }
-    } catch (err) {
-      this.deps.log("repeat lookup failed", { error: (err as Error).message });
     }
 
     // Speak the greeting ourselves (no platform welcome message here).
@@ -656,6 +678,7 @@ export class MediaStreamSession {
   }
 
   private async runTurn(text: string, sttMs: number, mode: "probe" | "full"): Promise<void> {
+    if (this.resMachine) return this.runReservationTurn(text, sttMs, mode);
     if (!this.agent || this.closed) return;
     const db = getDb();
     const agentState = this.agent.state;
@@ -822,6 +845,62 @@ export class MediaStreamSession {
       // endpoint. (A probe that DIDN'T handle returned early above without
       // reaching here, keeping awaitingReply set so the committed transcript
       // drives the turn instead.)
+      this.awaitingReply = false;
+    }
+  }
+
+  /**
+   * Reservation-mode turn: drive the deterministic state machine. No fast-path
+   * probe, no LLM filler, no loop-breaker — the machine answers in milliseconds.
+   * Self-contained try/finally so awaitingReply is always freed (never wedges).
+   */
+  private async runReservationTurn(text: string, sttMs: number, mode: "probe" | "full"): Promise<void> {
+    if (!this.resMachine || this.closed) return;
+    if (mode === "probe") return; // reservations run off the committed transcript only
+    if (!text.trim()) { this.awaitingReply = false; return; }
+    const db = getDb();
+    this.abort = new AbortController();
+    const turnStarted = Date.now();
+    try {
+      let turn: { say: string; kind: string; endCall?: boolean };
+      try {
+        turn = await this.resMachine.next(text);
+      } catch (err) {
+        if (this.callId) {
+          await recordCallEvent(db, this.callId, "turn_error", { error: String((err as Error)?.message ?? err) });
+        }
+        turn = { say: "Sorry, I didn't catch that — could you say that again?", kind: "error" };
+      }
+      const speakText = (turn.say || "").trim();
+      const turnMs = Date.now() - turnStarted;
+      if (this.callId) {
+        await appendTranscript(db, this.callId, { role: "caller", text, at: new Date().toISOString() });
+        if (speakText) {
+          await appendTranscript(db, this.callId, { role: "assistant", text: speakText, at: new Date().toISOString() });
+        }
+      }
+      const ttfbMs = speakText ? await this.speak(speakText) : null;
+      if (this.callId) {
+        const feltGapMs = sttMs + turnMs + (ttfbMs ?? 0);
+        await recordCallEvent(db, this.callId, feltGapMs > 8000 ? "slow_turn" : "turn_metrics", {
+          turnMs, sttMs, ttfbMs, feltGapMs, kind: turn.kind,
+          assistantWords: speakText ? speakText.split(/\s+/).length : 0,
+        });
+      }
+      if (turn.endCall) {
+        this.ending = true;
+        this.clearIdleWatch();
+        const outcome: CallOutcome = this.resMachine.reservation ? "ORDER_COMPLETED" : "NO_ORDER";
+        const tail = this.lastPlayoutEndAt - Date.now();
+        const delay = Math.max(this.deps.endDelayMs ?? 800, tail + 500);
+        this.endTimer = setTimeout(() => {
+          void (async () => {
+            await this.finalise(outcome);
+            try { this.ws.close(); } catch { /* noop */ }
+          })().catch(() => undefined);
+        }, delay);
+      }
+    } finally {
       this.awaitingReply = false;
     }
   }

@@ -53,6 +53,10 @@ const envSchema = z.object({
   // hosted agent over SIP (Twilio number config untouched, instant revert);
   // "relay" is the original ConversationRelay+Claude path.
   VOICE_STACK: z.enum(["relay", "elevenlabs", "custom"]).default("relay"),
+  // What the phone assistant does. "ordering" is the original food-ordering
+  // brain; "reservations" swaps in the deterministic table-reservation state
+  // machine. Default stays "ordering" so live behaviour is unchanged until cutover.
+  BUSINESS_MODE: z.enum(["ordering", "reservations"]).default("ordering"),
   ELEVENLABS_API_KEY: z.string().default(""),
   ELEVENLABS_AGENT_ID: z.string().default(""),
   ELEVENLABS_BRIDGE_SECRET: z.string().default(""),
