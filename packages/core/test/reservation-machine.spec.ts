@@ -328,6 +328,22 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("ask_name"); // nothing left to ask but the name
   });
 
+  it("captures a party said WITH the time, no re-ask ('seven, for four people')", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);                 // -> ask_time
+    const t = await m.next("seven, for four people");
+    expect(t.kind).toBe("ask_name");   // time 7 + party 4 both captured
+  });
+
+  it("captures party-then-time at the time step ('four people at seven')", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);                 // -> ask_time
+    const t = await m.next("four people at seven");
+    expect(t.kind).toBe("ask_name");
+  });
+
   it("a bare number at the day step is a DATE, never a party size", async () => {
     const m = await machine();
     await m.next("book a table");

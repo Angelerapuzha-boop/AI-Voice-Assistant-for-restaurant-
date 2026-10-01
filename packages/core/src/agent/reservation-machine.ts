@@ -347,19 +347,24 @@ export class ReservationMachine {
     return false;
   }
 
-  /** Extract a time from a free-form opener ONLY when there's an explicit time
+  /** Remove the captured party's words ("for four", "four people", "party of
+   * four") so its number can't be mistaken for an hour when parsing a time. */
+  private blankParty(text: string): string {
+    const s = ` ${text.toLowerCase()} `;
+    if (this.draft.partySize === undefined) return s;
+    const n = this.draft.partySize;
+    const w = numberWord(n);
+    return s
+      .replace(new RegExp(`\\bfor (?:${n}|${w})\\b`, "g"), " ")
+      .replace(new RegExp(`\\b(?:${n}|${w}) (?:people|persons|guests|pax|adults|of us|heads)\\b`, "g"), " ")
+      .replace(new RegExp(`\\b(?:party|group|table|booking) (?:of|for) (?:${n}|${w})\\b`, "g"), " ");
+  }
+
+  /** Extract a time from a free-form utterance ONLY when there's an explicit time
    * cue, and after blanking out a party number so "for four" isn't read as 4 AM
-   * (spec §14). Bare openers with no time still fall through to the time question. */
+   * (spec §14). Bare utterances with no time still fall through to the time question. */
   private applyTimeFrom(text: string): boolean {
-    let t = ` ${text.toLowerCase()} `;
-    if (this.draft.partySize !== undefined) {
-      const n = this.draft.partySize;
-      const w = numberWord(n);
-      t = t
-        .replace(new RegExp(`\\bfor (?:${n}|${w})\\b`, "g"), " ")
-        .replace(new RegExp(`\\b(?:${n}|${w}) (?:people|persons|guests|pax|adults|of us|heads)\\b`, "g"), " ")
-        .replace(new RegExp(`\\b(?:party|group|table|booking) (?:of|for) (?:${n}|${w})\\b`, "g"), " ");
-    }
+    const t = this.blankParty(text);
     const hasCue =
       /\b\d{1,2}\s*(?:am|pm)\b/.test(t) ||
       /\b\d{1,2}[:.h]\d{2}\b/.test(t) ||
@@ -404,18 +409,23 @@ export class ReservationMachine {
   }
 
   private handleTime(text: string): Promise<ReservationTurn> {
+    // Capture an explicit party said alongside the time ("seven, for four people"
+    // / "four people at seven") so we never re-ask what was already given.
+    this.applyExplicitPartyFrom(text);
     // "seven, actually make it two" — a mid-answer party correction: take the
     // time from BEFORE the correction word and the party from AFTER it. Only
     // splits when the correction is genuinely mid-utterance (index > 0), so a
     // leading "no, seven" stays a pure time answer.
     const corr = text.match(/\b(actually|make it|change (?:it |that )?to|i mean|rather|no)\b/i);
     const split = corr && corr.index !== undefined && corr.index > 0;
-    const timePart = split ? text.slice(0, corr!.index) : text;
+    const base = split ? text.slice(0, corr!.index) : text;
     if (split) {
       const p = parsePartySize(text.slice(corr!.index!));
       if (p) this.draft.partySize = p;
     }
-    const r = normaliseTime(timePart.trim() || text);
+    // Blank any captured party words so its number isn't mis-read as the hour.
+    const timeText = this.blankParty(base).trim();
+    const r = normaliseTime(timeText || text);
     if (r.time) { this.timeReasks = 0; this.draft.time = r.time; return this.advanceBooking(); }
     this.timeReasks++;
     if (this.timeReasks >= 3) return this.beginEscalation();
