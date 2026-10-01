@@ -1090,7 +1090,11 @@ export class MediaStreamSession {
     const db = getDb();
     if (!this.callId) return;
     const state = this.agent?.state;
-    let outcome: CallOutcome = forceOutcome ?? state?.outcome ?? "NO_ORDER";
+    // If a reservation was actually booked, the call completed an order even when
+    // finalise is reached via a bare ws-close (hangup race) with no forced outcome
+    // — don't mislabel a real booking as NO_ORDER.
+    let outcome: CallOutcome =
+      forceOutcome ?? state?.outcome ?? (this.resMachine?.reservation ? "ORDER_COMPLETED" : "NO_ORDER");
     // Reason the call is flagged for staff follow-up (empty = not flagged).
     let flaggedReason = forceOutcome === "NEEDS_REVIEW" ? "the call had trouble and was flagged" : "";
     if (state?.draftOrderId && !state.reviewLinkSent) {
