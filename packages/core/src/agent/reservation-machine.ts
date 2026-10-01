@@ -332,6 +332,21 @@ export class ReservationMachine {
     return false;
   }
 
+  /** Party size ONLY from an explicit phrase ("four people", "party of six",
+   * "table for four", "two of us") — never a bare number, which at the date/time
+   * step means a day or an hour, not a head count. Safe to call mid-flow. */
+  private applyExplicitPartyFrom(text: string): boolean {
+    if (this.draft.partySize !== undefined) return false;
+    const explicit =
+      /\b(?:party|group)\s+of\s+\w+/i.test(text) ||
+      /\btable\s+for\s+\w+/i.test(text) ||
+      /\b\w+\s+(?:people|persons|person|guests|guest|pax|adults|of\s+us|heads|covers)\b/i.test(text);
+    if (!explicit) return false;
+    const n = parsePartySize(text);
+    if (n) { this.draft.partySize = n; return true; }
+    return false;
+  }
+
   /** Extract a time from a free-form opener ONLY when there's an explicit time
    * cue, and after blanking out a party number so "for four" isn't read as 4 AM
    * (spec §14). Bare openers with no time still fall through to the time question. */
@@ -368,7 +383,16 @@ export class ReservationMachine {
     const r = normaliseDate(text, {
       now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
     });
-    if (r.date) { this.dateReasks = 0; this.draft.date = r.date; return this.advanceBooking(); }
+    if (r.date) {
+      this.dateReasks = 0;
+      this.draft.date = r.date;
+      // Capture an explicit party + a time given in the same breath ("tomorrow at
+      // 5 for four people") so we don't re-ask what the caller already said. Party
+      // first, so applyTimeFrom can blank the party words before reading the hour.
+      this.applyExplicitPartyFrom(text);
+      if (this.draft.time === undefined) this.applyTimeFrom(text);
+      return this.advanceBooking();
+    }
     this.dateReasks++;
     if (this.dateReasks >= 3) return this.beginEscalation();
     if (r.error === "PAST") return Promise.resolve(this.say("That day's already passed — what day would you like?", "ask_date"));

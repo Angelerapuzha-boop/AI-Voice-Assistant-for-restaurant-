@@ -314,6 +314,28 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("ask_name");
   });
 
+  it("captures a time given with the day ('tomorrow at 5 pm') — no redundant time question", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    const t = await m.next("tomorrow at 5 p.m."); // day + time together
+    expect(t.kind).toBe("ask_party"); // time captured, so it jumps to party
+  });
+
+  it("captures day + time + explicit party together at the day step", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    const t = await m.next("tomorrow at 7 for four people"); // all three
+    expect(t.kind).toBe("ask_name"); // nothing left to ask but the name
+  });
+
+  it("a bare number at the day step is a DATE, never a party size", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    const t = await m.next("the 5th"); // must not be read as 5 people
+    expect(["ask_time", "ask_date"]).toContain(t.kind); // moved on to time (or re-asked date), NOT party
+    expect(m.debug().draft.partySize).toBeUndefined();
+  });
+
   it("accepts all details in one opener and jumps to availability (spec §14)", async () => {
     const m = await machine();
     const iso = DATE;

@@ -196,8 +196,11 @@ export function normaliseTime(input: string): TimeResult {
   if (/\bmidday|noon\b/.test(t)) return { time: "12:00" };
   if (/\bmidnight\b/.test(t)) return { time: "00:00" };
 
-  const pm = /\b(pm|p m|tonight|evening|arvo|afternoon|night)\b/.test(t);
-  const am = /\b(am|a m|morning|breakfast)\b/.test(t);
+  // Detect AM/PM on a dot-normalised copy so "p.m." / "a.m." (how the STT often
+  // renders it) are caught as well as "pm" / "am".
+  const td = t.replace(/\./g, " ").replace(/\s+/g, " ");
+  const pm = /\b(pm|p m|tonight|evening|arvo|afternoon|night)\b/.test(td);
+  const am = /\b(am|a m|morning|breakfast)\b/.test(td);
 
   let hour: number | null = null;
   let minute = 0;

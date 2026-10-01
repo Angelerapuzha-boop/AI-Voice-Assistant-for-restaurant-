@@ -71,6 +71,18 @@ describe("normaliseDate", () => {
   });
 });
 
+describe("normaliseTime dotted am/pm (STT renders 'p.m.')", () => {
+  it("parses '5 p.m.' and '5:00 p.m.' as 17:00", () => {
+    expect(normaliseTime("5 p.m.").time).toBe("17:00");
+    expect(normaliseTime("5:00 p.m.").time).toBe("17:00");
+    expect(normaliseTime("at 7 p.m.").time).toBe("19:00");
+  });
+  it("parses '10 a.m.' as 10:00 (not pushed to PM)", () => {
+    expect(normaliseTime("10 a.m.").time).toBe("10:00");
+    expect(normaliseTime("9:30 a.m.").time).toBe("09:30");
+  });
+});
+
 describe("normaliseTime", () => {
   const cases: [string, string][] = [
     ["seven", "19:00"],
