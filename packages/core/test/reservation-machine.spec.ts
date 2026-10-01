@@ -433,6 +433,47 @@ describe("ReservationMachine — info layer (hours & location)", () => {
   });
 });
 
+describe("ReservationMachine — seating & dietary notes (spec §21-22)", () => {
+  it("acknowledges a window-seat request mid-flow and re-asks the current question", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    await m.next("four"); // -> ask_name
+    const t = await m.next("can we sit near the window?");
+    expect(t.say.toLowerCase()).toContain("window");
+    expect(t.say.toLowerCase()).toContain("name"); // re-asks the name
+    expect(m.debug().draft.specialRequests).toContain("window seat");
+  });
+
+  it("captures a request said with a slot ('four, by the window') without derailing", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    const t = await m.next("four, by the window"); // party + seating together
+    expect(t.kind).toBe("ask_name");               // party captured, moved on
+    expect(m.debug().draft.specialRequests).toContain("window seat");
+  });
+
+  it("captures a dietary note after booking and stores it on the reservation", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);
+    await m.next("seven");
+    await m.next("four");
+    await m.next("Kevin"); // -> confirmed (POST_CONFIRM)
+    const t = await m.next("oh, I'm allergic to prawns");
+    expect(t.kind).toBe("note_added");
+    expect(t.say.toLowerCase()).toContain("prawns");
+    const rows = await findReservations(db, ctx.restaurant.id, "+61400555001");
+    expect(rows[0]!.specialRequests.toLowerCase()).toContain("prawns");
+    // and the booking still stands + closes cleanly
+    const done = await m.next("no that's all");
+    expect(done.kind).toBe("goodbye");
+  });
+});
+
 describe("ReservationMachine — cancel & modify", () => {
   async function seedBooking(phone: string) {
     return (await createReservation(db, {

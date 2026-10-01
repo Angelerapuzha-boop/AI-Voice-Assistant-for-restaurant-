@@ -266,12 +266,48 @@ export function parsePartySize(text: string): number | null {
   return r.kind === "value" ? r.value : null;
 }
 
+// ------------------------------------------------------------- seating / special requests
+
+/** A seating preference the caller mentions ("near the window", "outside"),
+ * captured as a NOTE/request — never a guarantee, and we never invent rooms. */
+export function detectSeating(text: string): string | null {
+  const t = normalise(text);
+  if (/\bwindow\b/.test(t)) return "window seat";
+  if (/\b(outside|outdoor|out door|alfresco|courtyard|patio|garden)\b/.test(t)) return "outdoor seating";
+  if (/\b(indoors?|inside)\b/.test(t)) return "indoor seating";
+  if (/\bbooth\b/.test(t)) return "booth";
+  return null;
+}
+
+/** Dietary / accessibility / occasion notes to record on the booking. Captured
+ * as free-text notes for staff; a food allergy is NOTED, never guaranteed safe. */
+export function detectSpecialRequest(text: string): string | null {
+  const t = normalise(text);
+  const notes: string[] = [];
+  const allergy = t.match(/\ballerg(?:ic|y)(?:\s+to)?\s+([a-z][a-z\s]*?)(?:\s+(?:please|thanks|thank|and that|and)\b|$)/);
+  if (allergy && allergy[1]) notes.push(`allergy: ${allergy[1].trim()}`);
+  else if (/\ballerg/.test(t)) notes.push("allergy (confirm details with caller)");
+  if (/\bvegan\b/.test(t)) notes.push("vegan");
+  if (/\b(vegetarian|veggie)\b/.test(t)) notes.push("vegetarian");
+  if (/\b(gluten[\s-]?free|coeliac|celiac)\b/.test(t)) notes.push("gluten-free");
+  if (/\bhalal\b/.test(t)) notes.push("halal");
+  if (/\bkosher\b/.test(t)) notes.push("kosher");
+  if (/\b(high\s?chair|highchair)\b/.test(t)) notes.push("high chair");
+  if (/\b(wheelchair|accessible|accessibility|mobility)\b/.test(t)) notes.push("wheelchair access");
+  if (/\b(birthday|anniversary|engagement|celebration|celebrating)\b/.test(t)) notes.push("special occasion");
+  return notes.length ? [...new Set(notes)].join("; ") : null;
+}
+
 // ------------------------------------------------------------- name / phone
 
 const NON_NAME = new Set([
   "yes", "yeah", "yep", "no", "nah", "nope", "ok", "okay", "sure", "thanks",
   "thank", "please", "um", "uh", "hmm", "hi", "hello", "hey", "mate", "table",
   "booking", "reservation", "name", "the", "for", "under", "its", "it", "a",
+  // common non-name fragments left after stripping a request phrase, so e.g.
+  // "can we sit near the window" doesn't get accepted as a name.
+  "can", "we", "us", "sit", "near", "by", "could", "would", "want", "like",
+  "around", "have", "get", "something", "there", "here",
 ]);
 
 /**

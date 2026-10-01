@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   detectInfoQuery,
+  detectSeating,
+  detectSpecialRequest,
   interpretPartySize,
   numberWord,
   parseName,
@@ -144,6 +146,33 @@ describe("detectInfoQuery", () => {
   });
   it("a food order is not an info query (declined elsewhere)", () => {
     expect(detectInfoQuery("can I order a burger")).toBeNull();
+  });
+});
+
+describe("detectSeating", () => {
+  it("detects seating preferences", () => {
+    expect(detectSeating("can we sit near the window")).toBe("window seat");
+    expect(detectSeating("somewhere outside")).toBe("outdoor seating");
+    expect(detectSeating("a booth if possible")).toBe("booth");
+  });
+  it("returns null for normal answers", () => {
+    expect(detectSeating("tomorrow")).toBeNull();
+    expect(detectSeating("Kevin")).toBeNull();
+    expect(detectSeating("four people")).toBeNull();
+  });
+});
+
+describe("detectSpecialRequest", () => {
+  it("captures allergies and dietary + occasion", () => {
+    expect(detectSpecialRequest("I'm allergic to shrimp")).toContain("allergy: shrimp");
+    expect(detectSpecialRequest("we're vegan")).toContain("vegan");
+    expect(detectSpecialRequest("it's a birthday")).toContain("special occasion");
+    expect(detectSpecialRequest("we need a high chair")).toContain("high chair");
+  });
+  it("returns null for normal answers", () => {
+    expect(detectSpecialRequest("no special requests")).toBeNull();
+    expect(detectSpecialRequest("tomorrow at seven")).toBeNull();
+    expect(detectSpecialRequest("Raju")).toBeNull();
   });
 });
 

@@ -13,6 +13,8 @@ import { localToday, normaliseDate, normaliseTime } from "../domain/reservation-
 import {
   detectInfoQuery,
   detectIntent,
+  detectSeating,
+  detectSpecialRequest,
   interpretPartySize,
   isFoodOrderAttempt,
   isNo,
@@ -65,6 +67,7 @@ interface Draft {
   name?: string;
   phone?: string;
   specialRequests?: string;
+  seatingPref?: "" | "indoor" | "outdoor";
 }
 
 export interface ReservationTurn {
@@ -222,6 +225,29 @@ export class ReservationMachine {
       if (info) return this.handleInfo(info);
     }
 
+    // Seating / dietary / special requests, captured as NOTES from any utterance
+    // (spec §21-22). Stored on the draft so a request mentioned alongside a slot
+    // answer ("tomorrow at 7 for 4 by the window") rides along silently; a request
+    // on its own is acknowledged and we re-ask the current question. The request
+    // phrase is stripped so the slot parses cleanly from the remainder.
+    const { ack: extraAck, cleaned } = this.state !== "END"
+      ? this.captureExtras(text)
+      : { ack: "", cleaned: text };
+    if (extraAck && this.state === "POST_CONFIRM") {
+      await this.persistExtrasToReservation();
+      return this.say(`${extraAck}. Anything else, or are you all set?`, "note_added");
+    }
+
+    const before = this.state;
+    const turn = await this.route(cleaned || text);
+    // Pure-preference interjection (the handler didn't move on) → fold the ack in.
+    if (extraAck && this.state === before && /^ask_/.test(turn.kind)) {
+      return { ...turn, say: `${extraAck}. ${turn.say}` };
+    }
+    return turn;
+  }
+
+  private route(text: string): Promise<ReservationTurn> {
     switch (this.state) {
       case "GREETING": return this.handleGreeting(text);
       case "COLLECT_DATE": return this.handleDate(text);
@@ -236,7 +262,50 @@ export class ReservationMachine {
       case "CANCEL_CONFIRM": return this.handleCancelConfirm(text);
       case "MODIFY_WHAT": return this.handleModifyWhat(text);
       case "ESCALATION": return this.handleEscalation(text);
-      default: return this.say("Did you want to book, change or cancel a table?", "reprompt");
+      default: return Promise.resolve(this.say("Did you want to book, change or cancel a table?", "reprompt"));
+    }
+  }
+
+  /** Capture a seating / dietary / special request into the draft as a note, and
+   * strip the request phrase from the text so the slot parses from the remainder.
+   * Returns { ack (guarantee-free, "" if nothing new), cleaned text }. */
+  private captureExtras(text: string): { ack: string; cleaned: string } {
+    const acks: string[] = [];
+    let cleaned = text;
+    const seat = detectSeating(text);
+    if (seat && !(this.draft.specialRequests ?? "").includes(seat)) {
+      this.draft.specialRequests = [this.draft.specialRequests, seat].filter(Boolean).join("; ");
+      if (seat.startsWith("outdoor")) this.draft.seatingPref = "outdoor";
+      else if (seat.startsWith("indoor")) this.draft.seatingPref = "indoor";
+      acks.push(`No worries, I'll note a request for a ${seat}`);
+      cleaned = cleaned
+        .replace(/\b(?:by|near|next to|beside)?\s*(?:the\s+)?window(?:\s+seat|\s+table)?\b/gi, " ")
+        .replace(/\b(?:outside|outdoors?|out door|alfresco|courtyard|patio|garden)\b/gi, " ")
+        .replace(/\b(?:indoors?|inside)\b/gi, " ")
+        .replace(/\bbooth\b/gi, " ");
+    }
+    const special = detectSpecialRequest(text);
+    if (special && !(this.draft.specialRequests ?? "").includes(special)) {
+      this.draft.specialRequests = [this.draft.specialRequests, special].filter(Boolean).join("; ");
+      acks.push(`I've made a note — ${special}`);
+      cleaned = cleaned
+        .replace(/\b(?:i'?m|we'?re|i am)?\s*allerg(?:ic|y)(?:\s+to)?\s+[a-z\s]*?(?=[.,]|$|\bplease\b|\band\b|\bthanks?\b)/gi, " ")
+        .replace(/\b(vegan|vegetarian|veggie|gluten[\s-]?free|coeliac|celiac|halal|kosher|high\s?chair|highchair|wheelchair|accessible|accessibility|mobility|birthday|anniversary|engagement|celebration|celebrating)\b/gi, " ");
+    }
+    cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+    return { ack: acks.join(". "), cleaned };
+  }
+
+  /** Persist newly-captured notes onto an already-created booking (POST_CONFIRM). */
+  private async persistExtrasToReservation(): Promise<void> {
+    if (!this.reservation) return;
+    try {
+      await this.ctx.db.query(
+        `UPDATE reservations SET special_requests = $2, seating_pref = $3, updated_at = now() WHERE id = $1`,
+        [this.reservation.id, this.draft.specialRequests ?? "", this.draft.seatingPref ?? ""],
+      );
+    } catch {
+      /* best-effort note update — never breaks the confirmed booking */
     }
   }
 
@@ -680,6 +749,7 @@ export class ReservationMachine {
       date: date!, time: time!, partySize: partySize!, source: "phone",
       callId: this.ctx.callId ?? null, idempotencyKey,
       specialRequests: this.draft.specialRequests ?? "",
+      seatingPref: this.draft.seatingPref ?? "",
     };
 
     let created;
@@ -727,8 +797,9 @@ export class ReservationMachine {
     this.state = "POST_CONFIRM";
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
+    const noted = (r.specialRequests ?? "").trim() ? " I've popped your notes on the booking for the team." : "";
     return this.say(
-      `Beauty — that's you booked for ${r.partySize} ${when}, under ${r.customerName}. I'll flick you a text to confirm. Anything else, or are you all set?`,
+      `Beauty — that's you booked for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll flick you a text to confirm. Anything else, or are you all set?`,
       "confirmed",
       false,
     );
