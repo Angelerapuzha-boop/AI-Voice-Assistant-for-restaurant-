@@ -455,6 +455,12 @@ export class ReservationMachine {
     return false;
   }
 
+  /** A real date token is present (so a bare number like "8" in "8pm" is NOT
+   * mistaken for "the 8th"). Only an actual day/month/relative word counts. */
+  private hasDateWord(text: string): boolean {
+    return /\b(today|tonight|tomorrow|tomorro|mon(day)?|tue(s|sday)?|wed(nesday)?|thur?(sday)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?|next\s+week|this\s+week|fortnight|weekend|\b\d{1,2}(st|nd|rd|th)\b|\b\d{1,2}[\/\-]\d{1,2}\b)\b/i.test(text);
+  }
+
   /** A time cue is present (so a bare number is an hour, not a party size). */
   private hasTimeCue(text: string): boolean {
     return (
@@ -471,13 +477,15 @@ export class ReservationMachine {
    * a bare restatement does not. Returns human acks for what changed ([] if
    * nothing). Disambiguates party vs time: a bare "make it six" is a party change
    * (no time cue); "eight pm" is a time change (never read as party). (§ corrections) */
-  private applyLateCorrection(text: string): string[] {
+  private applyLateCorrection(text: string): { acks: string[]; cleaned: string } {
     const acks: string[] = [];
+    let cleaned = text;
     const timeCue = this.hasTimeCue(text);
     const corrCue = /\b(actually|instead|rather|make it|change (?:it|that)(?:\s+to)?|scrap|i mean|not|sorry|no)\b/i.test(text);
     const partyPhrase = /\b(?:party|group|table|booking)\s+(?:of|for)\s+\w+|\b\w+\s+(?:people|persons?|guests?|pax|adults|of us)\b/i.test(text);
-    // DATE — an explicit correction to a real date token that differs.
-    if (this.draft.date !== undefined && corrCue) {
+    // DATE — an explicit correction to a REAL date token that differs (never a
+    // bare number: "8" in "8pm" must not become "the 8th").
+    if (this.draft.date !== undefined && corrCue && this.hasDateWord(text)) {
       const d = normaliseDate(text, {
         now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
       });
@@ -497,9 +505,16 @@ export class ReservationMachine {
       if (p.kind === "value" && p.value !== this.draft.partySize) {
         this.draft.partySize = p.value;
         acks.push(`make it ${numberWord(p.value)}`);
+        // Strip the correction fragment so a name said in the same breath
+        // ("make it six, the name's Tara") still parses from the remainder.
+        cleaned = cleaned
+          .replace(/\b(actually,?\s*)?(make it|change (?:it|that)(?:\s+to)?|scrap that,?\s*)\s*(a\s+)?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(\s+(?:people|persons?|guests?|of us|pax|adults))?/gi, " ")
+          .replace(/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:people|persons?|guests?|of us|pax|adults)\b/gi, " ")
+          .replace(/\bnot\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi, " ")
+          .replace(/\s{2,}/g, " ").trim();
       }
     }
-    return acks;
+    return { acks, cleaned };
   }
 
   /** A direct slot change stated against a CONFIRMED booking (POST_CONFIRM),
@@ -509,10 +524,14 @@ export class ReservationMachine {
     const r = this.reservation!;
     const changes: { date?: string; time?: string; partySize?: number } = {};
     const timeCue = this.hasTimeCue(text);
-    const d = normaliseDate(text, {
-      now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
-    });
-    if (d.date && d.date !== r.reservationDate) changes.date = d.date;
+    // Only a REAL date token changes the date — never a bare number ("make it
+    // 8pm" must not become "the 8th").
+    if (this.hasDateWord(text)) {
+      const d = normaliseDate(text, {
+        now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
+      });
+      if (d.date && d.date !== r.reservationDate) changes.date = d.date;
+    }
     if (timeCue) {
       const tm = normaliseTime(text);
       if (tm.time && tm.time !== r.reservationTime.slice(0, 5)) changes.time = tm.time;
@@ -562,7 +581,7 @@ export class ReservationMachine {
 
   private handleTime(text: string): Promise<ReservationTurn> {
     // A late DATE correction said at the time step ("no sorry, make it Thursday").
-    const corrAcks = this.applyLateCorrection(text);
+    const { acks: corrAcks } = this.applyLateCorrection(text);
     // Capture an explicit party said alongside the time ("seven, for four people"
     // / "four people at seven") so we never re-ask what was already given.
     this.applyExplicitPartyFrom(text);
@@ -797,16 +816,18 @@ export class ReservationMachine {
 
   private async handleName(text: string): Promise<ReservationTurn> {
     // A late correction to party/date/time said at the name step
-    // ("actually make it six, name's Tara") must be honoured, not dropped.
-    const corrAcks = this.applyLateCorrection(text);
-    const name = parseName(text);
+    // ("actually make it six, name's Tara") must be honoured, not dropped — and
+    // the name must still parse from the remainder (cleaned) of the same breath.
+    const { acks: corrAcks, cleaned } = this.applyLateCorrection(text);
+    const name = parseName(cleaned);
     if (!name) {
       if (corrAcks.length) {
         // This turn was a correction, not a failed name attempt — don't count it.
         return this.say(`No worries, I'll ${corrAcks.join(" and ")}. And what name should I put the table under?`, "ask_name");
       }
       this.nameReasks++;
-      if (this.nameReasks >= 3) { this.state = "COLLECT_NAME"; return this.say("Let's try again — what name should I put the table under?", "ask_name"); }
+      // Bounded recovery — never loop "let's try again" forever (§ no question loops).
+      if (this.nameReasks >= 3) return this.beginEscalation();
       return this.say(this.nameReasks === 1 ? "I didn't catch the name — just a first name's fine." : "And what name's the booking under?", "ask_name");
     }
     this.draft.name = name;
@@ -817,7 +838,7 @@ export class ReservationMachine {
 
   private handlePhone(text: string): Promise<ReservationTurn> {
     // A late correction to party/date/time said at the phone step is honoured.
-    const corrAcks = this.applyLateCorrection(text);
+    const { acks: corrAcks } = this.applyLateCorrection(text);
     const phone = parsePhone(text);
     if (!phone) {
       if (corrAcks.length) {

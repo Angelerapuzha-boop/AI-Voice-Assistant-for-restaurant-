@@ -121,4 +121,35 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
     expect(after!.reservationTime).toBe(before!.reservationTime);
     expect(turn.endCall).toBe(true);
   });
+
+  it("party AND name in ONE breath at the name step both land (E1 compound)", async () => {
+    const phone = "+61411222811";
+    await play(mk(), ["book a table", "tomorrow", "seven", "four", "actually make it six, the name's Tara", "0411 222 811"]);
+    const b = await booking(phone);
+    expect(b).toBeTruthy();
+    expect(b!.partySize).toBe(6);
+    expect(b!.customerName.toLowerCase()).toContain("tara");
+  });
+
+  it("GUARD: name capture escalates after repeated misses — never an infinite loop", async () => {
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "four"]); // now at the name step
+    await m.next("um"); // parseName rejects filler (spec)
+    await m.next("um");
+    const t3 = await m.next("um");
+    expect(m.debug().state).toBe("ESCALATION");
+    expect(t3.kind).toBe("escalate_name");
+    expect(t3.say.toLowerCase()).not.toContain("let's try again");
+  });
+
+  it("GUARD: post-confirm 'make it 8pm instead' changes time only, not the date (P1)", async () => {
+    const phone = "+61411222812";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Willa", "0411 222 812"]);
+    const before = await booking(phone);
+    await m.next("actually, can we make it 8 pm instead of 7");
+    const after = await booking(phone);
+    expect(after!.reservationTime.slice(0, 5)).toBe("20:00");
+    expect(after!.reservationDate).toBe(before!.reservationDate); // date unchanged
+  });
 });
