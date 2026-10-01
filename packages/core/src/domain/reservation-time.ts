@@ -193,7 +193,10 @@ export function normaliseTime(input: string): TimeResult {
   // Keep "." / ":" / "h" so "7.30" / "7:30" / "7h30" parse; drop other punctuation.
   const t = input.toLowerCase().replace(/[,!?]/g, " ").replace(/\s+/g, " ").trim();
   if (!t) return { error: "INVALID_TIME" };
-  if (/\bmidday|noon\b/.test(t)) return { time: "12:00" };
+  // NB the group boundaries matter: "/\bmidday|noon\b/" (no \b before noon) matches
+  // the "noon" inside "after·noon" and silently returned 12:00 for "7 PM in the
+  // afternoon" (live call CA46547d: 7 PM -> 12 PM). Anchor both words.
+  if (/\b(midday|noon)\b/.test(t)) return { time: "12:00" };
   if (/\bmidnight\b/.test(t)) return { time: "00:00" };
 
   // Detect AM/PM on a dot-normalised copy so "p.m." / "a.m." (how the STT often

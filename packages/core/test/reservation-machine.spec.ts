@@ -328,6 +328,16 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("ask_name"); // nothing left to ask but the name
   });
 
+  it("REPLAY live bug CA46547d: '7 PM in the afternoon for a table of five' -> 19:00 + party 5, NEVER 12 PM", async () => {
+    const m = await machine();
+    await m.next("book a table");
+    await m.next(DATE);                       // -> ask_time
+    const t = await m.next("It'll be at about 7:00 PM in the afternoon for a table of five.");
+    expect(t.kind).toBe("ask_name");          // time + party both captured
+    expect(m.debug().draft.time).toBe("19:00"); // NOT 12:00 (afternoon≠noon)
+    expect(m.debug().draft.partySize).toBe(5);  // "table of five" understood
+  });
+
   it("captures a party said WITH the time, no re-ask ('seven, for four people')", async () => {
     const m = await machine();
     await m.next("book a table");

@@ -179,9 +179,10 @@ export class ReservationMachine {
     return line;
   }
 
-  /** A softened re-ask of the current question, for the silence watchdog. */
+  /** Re-ask the CURRENT question for the silence watchdog — state-aware, not a
+   * generic "take your time" timer phrase (Kevin: that felt disconnected). */
   gentleReprompt(): string {
-    return this.lastPrompt ? `Take your time. ${this.lastPrompt}` : "Whenever you're ready — how can I help?";
+    return this.lastPrompt || "What can I help you with — a booking?";
   }
 
   /** Internal snapshot for turn-level debugging (spec §18). Never spoken. */
@@ -344,8 +345,7 @@ export class ReservationMachine {
   private applyExplicitPartyFrom(text: string): boolean {
     if (this.draft.partySize !== undefined) return false;
     const explicit =
-      /\b(?:party|group)\s+of\s+\w+/i.test(text) ||
-      /\btable\s+for\s+\w+/i.test(text) ||
+      /\b(?:party|group|table|booking)\s+(?:of|for)\s+\w+/i.test(text) ||
       /\b\w+\s+(?:people|persons|person|guests|guest|pax|adults|of\s+us|heads|covers)\b/i.test(text);
     if (!explicit) return false;
     const n = parsePartySize(text);

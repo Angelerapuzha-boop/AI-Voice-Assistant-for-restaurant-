@@ -551,8 +551,12 @@ export class MediaStreamSession {
   private startIdleWatch(): void {
     this.idleTimer = setInterval(() => {
       if (this.closed) return this.clearIdleWatch();
-      // Busy (speaking, thinking, or the caller is mid-utterance) = active.
-      if (this.speaking || this.awaitingReply || this.inUtterance) {
+      // Busy = active: we're speaking, a turn is being processed, the caller is
+      // mid-utterance, OR a live partial transcript is building (they're talking
+      // right now). The partial check stops a silence prompt firing the instant
+      // the caller has started answering (Kevin: "Take your time" fired after I'd
+      // already responded).
+      if (this.speaking || this.awaitingReply || this.inUtterance || (this.scribe?.peekPartial() ?? "").length > 0) {
         this.lastActivityAt = Date.now();
         return;
       }

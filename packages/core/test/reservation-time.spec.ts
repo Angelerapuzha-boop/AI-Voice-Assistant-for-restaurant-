@@ -71,6 +71,19 @@ describe("normaliseDate", () => {
   });
 });
 
+describe("normaliseTime — 'afternoon' must NOT become noon (live bug CA46547d: 7 PM -> 12 PM)", () => {
+  it("'7 PM in the afternoon' -> 19:00, never 12:00", () => {
+    expect(normaliseTime("7 PM in the afternoon").time).toBe("19:00");
+    expect(normaliseTime("at about 7:00 PM in the afternoon for a table of five").time).toBe("19:00");
+    expect(normaliseTime("this afternoon at 7").time).toBe("19:00");
+  });
+  it("midday / noon still resolve to 12:00", () => {
+    expect(normaliseTime("midday").time).toBe("12:00");
+    expect(normaliseTime("noon").time).toBe("12:00");
+    expect(normaliseTime("at noon").time).toBe("12:00");
+  });
+});
+
 describe("normaliseTime dotted am/pm (STT renders 'p.m.')", () => {
   it("parses '5 p.m.' and '5:00 p.m.' as 17:00", () => {
     expect(normaliseTime("5 p.m.").time).toBe("17:00");

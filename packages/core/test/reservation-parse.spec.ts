@@ -108,6 +108,15 @@ describe("numberWord", () => {
   });
 });
 
+describe('"table of N" / "party of N" party phrasing', () => {
+  it("resolves table/party/group of N to a party size", () => {
+    expect(parsePartySize("a table of five")).toBe(5);
+    expect(parsePartySize("for a table of five")).toBe(5);
+    expect(parsePartySize("party of 6")).toBe(6);
+    expect(parsePartySize("group of eight")).toBe(8);
+  });
+});
+
 describe("parsePartySize (confident-only wrapper)", () => {
   it("returns a number only for confident values", () => {
     expect(parsePartySize("four")).toBe(4);
