@@ -284,9 +284,13 @@ export function detectSeating(text: string): string | null {
 export function detectSpecialRequest(text: string): string | null {
   const t = normalise(text);
   const notes: string[] = [];
-  const allergy = t.match(/\ballerg(?:ic|y)(?:\s+to)?\s+([a-z][a-z\s]*?)(?:\s+(?:please|thanks|thank|and that|and)\b|$)/);
-  if (allergy && allergy[1]) notes.push(`allergy: ${allergy[1].trim()}`);
-  else if (/\ballerg/.test(t)) notes.push("allergy (confirm details with caller)");
+  const allergy = t.match(/\ballerg(?:ic|y)(?:\s+to)?\s+([a-z][a-z\s]+)/);
+  if (allergy && allergy[1]) {
+    const a = allergy[1].trim().replace(/\s+(?:please|thanks?|thank you|that'?s it|that is).*$/, "").trim();
+    notes.push(a ? `allergy: ${a}` : "allergy (confirm details with caller)");
+  } else if (/\ballerg/.test(t)) {
+    notes.push("allergy (confirm details with caller)");
+  }
   if (/\bvegan\b/.test(t)) notes.push("vegan");
   if (/\b(vegetarian|veggie)\b/.test(t)) notes.push("vegetarian");
   if (/\b(gluten[\s-]?free|coeliac|celiac)\b/.test(t)) notes.push("gluten-free");

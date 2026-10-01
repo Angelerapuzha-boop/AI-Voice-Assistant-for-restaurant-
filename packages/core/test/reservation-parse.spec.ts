@@ -165,6 +165,7 @@ describe("detectSeating", () => {
 describe("detectSpecialRequest", () => {
   it("captures allergies and dietary + occasion", () => {
     expect(detectSpecialRequest("I'm allergic to shrimp")).toContain("allergy: shrimp");
+    expect(detectSpecialRequest("Actually, I'm allergic to prawns.")).toContain("allergy: prawns");
     expect(detectSpecialRequest("we're vegan")).toContain("vegan");
     expect(detectSpecialRequest("it's a birthday")).toContain("special occasion");
     expect(detectSpecialRequest("we need a high chair")).toContain("high chair");
