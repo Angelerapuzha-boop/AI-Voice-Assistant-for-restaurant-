@@ -558,6 +558,22 @@ export class MediaStreamSession {
       }
       if (Date.now() - this.lastActivityAt < IDLE_NUDGE_MS) return;
       this.lastActivityAt = Date.now();
+      // After a booking is confirmed the line stays open for a change/cancel. If
+      // the caller has gone quiet they're done — DON'T re-ask "anything else?"
+      // (that was the repeated-confirmation complaint). One warm goodbye, hang up,
+      // booking stands.
+      if (this.resMachine && this.resMachine.debug().state === "POST_CONFIRM") {
+        this.clearIdleWatch();
+        this.ending = true;
+        void (async () => {
+          await this.sayAndLog("All booked — see you then. Cheers.");
+          const tail = Math.max(300, this.lastPlayoutEndAt - Date.now());
+          await new Promise((r) => setTimeout(r, tail + 300));
+          await this.finalise(this.resMachine?.reservation ? "ORDER_COMPLETED" : undefined);
+          try { this.ws.close(); } catch { /* noop */ }
+        })().catch(() => undefined);
+        return;
+      }
       if (this.idleNudges < IDLE_MAX_NUDGES) {
         this.idleNudges += 1;
         // Spec §11: the FIRST recovery is a gentle re-ask of the current
@@ -569,13 +585,13 @@ export class MediaStreamSession {
         } else {
           line = this.idleNudges === 1 ? "Sorry, are you still there?" : "Still there? What can I get you?";
         }
-        void this.speak(line).catch(() => undefined);
+        void this.sayAndLog(line).catch(() => undefined);
         return;
       }
       // Two nudges unanswered -> bow out so the line never hangs in silence.
       this.clearIdleWatch();
       void (async () => {
-        await this.speak("No worries — call back anytime. Cheers.");
+        await this.sayAndLog("No worries — call back anytime. Cheers.");
         const tail = Math.max(300, this.lastPlayoutEndAt - Date.now());
         await new Promise((r) => setTimeout(r, tail + 300));
         await this.finalise(undefined);
@@ -706,7 +722,7 @@ export class MediaStreamSession {
       const line = this.resMachine
         ? this.resMachine.gentleReprompt()
         : "Sorry, I didn't catch that — could you say that again?";
-      void this.speak(line).catch(() => undefined);
+      void this.sayAndLog(line).catch(() => undefined);
     }, 6000);
   }
 
@@ -985,6 +1001,19 @@ export class MediaStreamSession {
     } finally {
       this.awaitingReply = false;
     }
+  }
+
+  /** Speak a SYSTEM-initiated line (idle nudge, goodbye, stall re-prompt) AND
+   * record it in the transcript, so a later review of the call/recording shows
+   * everything that was actually said — these lines weren't being logged, which
+   * hid repeated prompts from the transcript. */
+  private async sayAndLog(line: string): Promise<number | null> {
+    if (this.callId) {
+      try {
+        await appendTranscript(getDb(), this.callId, { role: "assistant", text: line, at: new Date().toISOString() });
+      } catch { /* transcript logging is best-effort */ }
+    }
+    return this.speak(line);
   }
 
   /**

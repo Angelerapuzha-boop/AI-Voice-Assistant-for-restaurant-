@@ -123,6 +123,10 @@ const PARTY_NOISE = new Set([
   "and", "it", "its", "that", "thats", "there", "be", "gonna", "we", "were",
   "put", "name", "under", "total", "all", "up", "altogether", "hi", "hello",
   "hey", "i", "m", "re", "s", "ll", "d", "have", "got", "is", "will", "gonna",
+  // STT sometimes tacks a time suffix onto a spoken count ("four" -> "4:00 p.m.")
+  // in the party slot, where a time is meaningless — treat the suffix as noise so
+  // the bare number resolves confidently.
+  "p", "pm", "am", "oclock", "clock", "o",
 ]);
 
 const CORRECTION_RE =

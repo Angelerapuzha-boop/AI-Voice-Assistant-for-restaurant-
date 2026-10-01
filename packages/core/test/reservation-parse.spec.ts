@@ -32,6 +32,12 @@ describe("interpretPartySize — the 'four people' regression (spec §23)", () =
     });
   }
 
+  it('"4:00 p.m." / "4 p.m." in the party slot -> confident 4 (STT time-suffix is noise)', () => {
+    expect(interpretPartySize("4:00 p.m.", { expectingParty: true })).toEqual({ kind: "value", value: 4 });
+    expect(interpretPartySize("4 p.m.", { expectingParty: true })).toEqual({ kind: "value", value: 4 });
+    expect(interpretPartySize("six p.m.", { expectingParty: true })).toEqual({ kind: "value", value: 6 });
+  });
+
   it('STT homophone "for" -> candidate 4 ONLY while expecting party (spec §2)', () => {
     expect(interpretPartySize("for", { expectingParty: true })).toEqual({ kind: "candidate", value: 4 });
     // Not while NOT expecting party (opener extraction must not guess).
