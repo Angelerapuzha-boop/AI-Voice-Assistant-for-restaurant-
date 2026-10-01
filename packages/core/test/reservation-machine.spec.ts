@@ -40,7 +40,8 @@ describe("ReservationMachine — booking flow", () => {
     t = await m.next("Kevin");
     // caller ID present, so it finalises without asking phone
     expect(t.kind).toBe("confirmed");
-    expect(t.say).toMatch(/booked for 4/i);
+    expect(t.say).toMatch(/booked/i);
+    expect(t.say).toMatch(/\b(table )?for 4\b/);
     expect(t.say).toMatch(/7 PM/);
     // stays on the line so the caller can change or cancel in the same call
     expect(t.endCall).toBe(false);

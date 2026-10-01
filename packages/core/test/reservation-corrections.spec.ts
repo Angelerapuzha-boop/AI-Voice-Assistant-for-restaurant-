@@ -153,3 +153,66 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
     expect(after!.reservationDate).toBe(before!.reservationDate); // date unchanged
   });
 });
+
+describe("call-quality fixes from listening to recordings (Kevin's 6 items)", () => {
+  it("#1 repeat request after confirmation reads the booking back and stays on the line", async () => {
+    const phone = "+61411222821";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Marco", "0411 222 821"]);
+    const t = await m.next("sorry, can you say that again?");
+    expect(t.kind).toBe("repeat");
+    expect(t.say).toMatch(/\bfor 4\b|\bfour\b/);
+    expect(t.say).toMatch(/7\s?pm/i);
+    expect(t.endCall).toBeFalsy();
+    expect(m.debug().state).toBe("POST_CONFIRM"); // did not hang up
+  });
+
+  it("#1 repeat mid-booking summarises what's captured and re-asks", async () => {
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven"]); // at the party step
+    const t = await m.next("what did I say so far?");
+    expect(t.kind).toBe("repeat");
+    expect(t.say).toMatch(/7\s?pm/i);
+  });
+
+  it("#2/#6 does NOT hang up on a vague reply — gives the caller their last word", async () => {
+    const phone = "+61411222822";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 822"]);
+    const vague = await m.next("um");
+    expect(vague.endCall).toBeFalsy();
+    expect(vague.kind).toBe("anything_else");
+    const done = await m.next("no that's all thanks");
+    expect(done.endCall).toBe(true);
+    // booking still intact
+    expect((await booking(phone))!.partySize).toBe(4);
+  });
+
+  it("#4 distracted caller is held once, then offered a call-back", async () => {
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven"]); // at the party step
+    const b1 = await m.next("hang on");
+    expect(b1.kind).toBe("busy_hold");
+    expect(b1.endCall).toBeFalsy();
+    const b2 = await m.next("one sec");
+    expect(b2.kind).toBe("busy_callback");
+    expect(b2.endCall).toBe(true);
+  });
+
+  it("#5 conflicting dates are clarified, not guessed ('Monday' then 'Friday')", async () => {
+    const phone = "+61411222825";
+    const m = mk();
+    await m.next("book a table");
+    await m.next("next Monday");
+    const t = await m.next("Friday at 7"); // different day, no correction cue → clarify
+    expect(t.kind).toBe("confirm_date");
+    expect(t.say.toLowerCase()).toContain("monday");
+    expect(t.say.toLowerCase()).toContain("friday");
+    const t2 = await m.next("Friday please");
+    expect(t2.kind).toBe("ask_time"); // resumes collection
+    await play(m, ["7 pm", "two", "Gina", "0411 222 825"]);
+    const b = await booking(phone);
+    expect(b).toBeTruthy();
+    expect(dow(b!.reservationDate)).toBe(5); // Friday
+  });
+});

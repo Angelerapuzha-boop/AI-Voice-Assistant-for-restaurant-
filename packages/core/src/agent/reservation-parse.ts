@@ -403,3 +403,32 @@ export function isNo(text: string): boolean {
   const t = normalise(text);
   return /\b(no|nah|nope|neither|won'?t work|doesn'?t work|can'?t do|another|different|something else|not that|not really|nope)\b/.test(t);
 }
+
+/** The caller asks us to repeat / read the booking back ("say that again",
+ * "what did I book?", "can you run that by me?"). */
+export function detectRepeatRequest(text: string): boolean {
+  const t = normalise(text);
+  return (
+    /\b(say (that|it) again|repeat (that|it|the booking)?|come again|one more time|run (that|it) by me|go over (that|it) again|read (that|it|the booking|the details) back|read (that|it) out)\b/.test(t) ||
+    /\bwhat (did|'?d) (i|we) (book|get|say|put)\b/.test(t) ||
+    /\bwhat('?s| is| was) (the|my) (booking|reservation|time|details)\b/.test(t) ||
+    /\b(sorry,? )?(what was that|didn'?t (catch|hear) that|can you (repeat|say that again))\b/.test(t) ||
+    /\b(go over|run through) (the|my) (details|booking|reservation)\b/.test(t)
+  );
+}
+
+/** The caller is momentarily distracted / talking to someone else / asking us to
+ * hold ("hang on", "one sec", "give me a minute", "bear with me"). */
+export function detectBusy(text: string): boolean {
+  const t = normalise(text);
+  return /\b(hang on|hold on|hold up|one sec(ond)?|just a sec(ond)?|just a (minute|moment|mo)|give me a (sec(ond)?|minute|moment|mo)|bear with me|wait a (sec(ond)?|minute|moment)|two secs|gimme a (sec|minute|moment))\b/.test(t);
+}
+
+/** The caller signals they're finished ("that's all", "nothing else", "I'm
+ * good", "no thanks") — used to end only on a CLEAR done, never on a vague reply. */
+export function detectDone(text: string): boolean {
+  const t = normalise(text);
+  return (
+    /\b(that'?s (all|it|everything|the lot|me|fine|great|perfect|lovely)|nothing (else|more|further)|no(thing)? thanks?|i'?m (all )?(good|done|set|right)|we'?re (all )?(good|done|set)|all (good|done|set|sorted)|that(')?ll be all|that will be all|no that'?s (all|it|fine)|nah that'?s (all|it)|cheers,? (thanks|that'?s all)|bye|goodbye|see you|that'?s the lot)\b/.test(t)
+  );
+}

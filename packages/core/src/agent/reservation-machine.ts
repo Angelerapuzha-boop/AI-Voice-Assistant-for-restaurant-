@@ -11,8 +11,11 @@ import {
 import { enqueueNotification } from "../domain/notifications";
 import { localToday, normaliseDate, normaliseTime } from "../domain/reservation-time";
 import {
+  detectBusy,
+  detectDone,
   detectInfoQuery,
   detectIntent,
+  detectRepeatRequest,
   detectSeating,
   detectSpecialRequest,
   interpretPartySize,
@@ -61,6 +64,7 @@ export type ReservationState =
   | "FIND_BOOKING"
   | "CANCEL_CONFIRM"
   | "MODIFY_WHAT"
+  | "CONFIRM_DATE"
   | "ESCALATION"
   | "END";
 
@@ -157,6 +161,14 @@ export class ReservationMachine {
   reservation: Reservation | null = null;
   private candidates: Reservation[] = [];
   private altTimes: string[] = [];
+  /** Two conflicting dates [alreadyCaptured, newlyHeard] awaiting the caller's
+   * pick, and the step to resume once resolved (spec: ambiguous date → clarify). */
+  private pendingDateOptions: [string, string] | undefined;
+  private resumeAfterDate: ReservationState | undefined;
+  /** Gentle "anything else?" re-offers at POST_CONFIRM before we ring off, and a
+   * count of "hang on / one sec" distractions, so we hold then offer a call-back. */
+  private postConfirmReprompts = 0;
+  private busyCount = 0;
   private nameReasks = 0;
   private phoneReasks = 0;
   private dateReasks = 0;
@@ -221,6 +233,23 @@ export class ReservationMachine {
       );
     }
 
+    // Caller asks us to repeat / read the booking back — restate it (or what
+    // we've got so far) and stay where we are, never ignore it (Kevin #1). Only
+    // when there's something to repeat (not at the greeting / before any detail).
+    const haveSomething = this.reservation !== null || this.draft.date !== undefined || this.draft.time !== undefined || this.draft.partySize !== undefined || this.draft.name !== undefined;
+    if (this.state !== "END" && this.state !== "GREETING" && haveSomething && detectRepeatRequest(text)) return this.handleRepeat();
+
+    // Caller is distracted / talking to someone else / asks us to hold — be
+    // gracious: hold once, then offer a call-back rather than barging on (Kevin #4).
+    if (this.state !== "END" && this.state !== "GREETING" && detectBusy(text)) return this.handleBusy();
+
+    // A different date named (no correction cue) during a later collection step
+    // clashes with what we already have — clarify instead of guessing (Kevin #5).
+    if (["COLLECT_TIME", "COLLECT_PARTY_SIZE", "CONFIRM_PARTY", "COLLECT_NAME", "COLLECT_PHONE"].includes(this.state)) {
+      const clash = this.checkDateConflict(text);
+      if (clash) return clash;
+    }
+
     // Info layer: answer a factual enquiry (hours / location) from real data,
     // then carry on where we were. Uses distinctive phrasings that don't collide
     // with slot answers, so it's safe to check in any pre-confirmed state.
@@ -265,6 +294,7 @@ export class ReservationMachine {
       case "FIND_BOOKING": return this.handleFindBooking(text);
       case "CANCEL_CONFIRM": return this.handleCancelConfirm(text);
       case "MODIFY_WHAT": return this.handleModifyWhat(text);
+      case "CONFIRM_DATE": return this.handleConfirmDate(text);
       case "ESCALATION": return this.handleEscalation(text);
       default: return Promise.resolve(this.say("Did you want to book, change or cancel a table?", "reprompt"));
     }
@@ -545,6 +575,80 @@ export class ReservationMachine {
       }
     }
     return changes;
+  }
+
+  /** Restate the booking (or progress so far) when the caller asks us to repeat,
+   * without changing where we are. (Kevin #1 — a "say that again" was ignored.) */
+  private handleRepeat(): ReservationTurn {
+    if (this.reservation) {
+      const r = this.reservation;
+      const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
+      return this.say(`Of course — I've got you down for ${r.partySize} ${when}, under ${r.customerName}. Is there anything else I can help you with?`, "repeat");
+    }
+    const parts: string[] = [];
+    if (this.draft.partySize !== undefined) parts.push(`a table for ${numberWord(this.draft.partySize)}`);
+    if (this.draft.date) parts.push(speakDate(this.draft.date));
+    if (this.draft.time) parts.push(`at ${speakTime(this.draft.time)}`);
+    if (this.draft.name) parts.push(`under ${this.draft.name}`);
+    const summary = parts.length ? `No worries — so far I've got ${parts.join(", ")}. ` : "No worries. ";
+    return this.say(`${summary}${this.lastPrompt || "What else can I get for the booking?"}`, "repeat");
+  }
+
+  /** The caller sounds distracted / asks us to hold. Hold graciously once; if it
+   * happens again, invite a call-back rather than pushing on. (Kevin #4.) */
+  private handleBusy(): ReservationTurn {
+    this.busyCount += 1;
+    if (this.busyCount >= 2) {
+      this.state = "END";
+      return this.say(
+        "No worries at all — sounds like you've got a bit on. Give us a call back whenever suits and we'll get your table sorted. Cheers!",
+        "busy_callback",
+        true,
+      );
+    }
+    return this.say("Of course, no rush — I'm here whenever you're ready.", "busy_hold");
+  }
+
+  /** The caller named a DIFFERENT date than the one already captured, with no
+   * correction cue — don't silently keep or overwrite; ask which they meant.
+   * (Kevin #5: "the weekend" then "3pm tomorrow" must be clarified.) Returns the
+   * clarify turn, or null when there's no conflict. */
+  private checkDateConflict(text: string): ReservationTurn | null {
+    if (this.draft.date === undefined) return null;
+    if (/\b(actually|instead|rather|make it|change (?:it|that)|scrap|i mean|not|sorry|no)\b/i.test(text)) return null; // explicit correction, handled elsewhere
+    if (!this.hasDateWord(text)) return null;
+    const d = normaliseDate(text, { now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays });
+    if (!d.date || d.date === this.draft.date) return null;
+    this.pendingDateOptions = [this.draft.date, d.date];
+    this.resumeAfterDate = this.state;
+    this.state = "CONFIRM_DATE";
+    return this.say(`Just to check — did you want ${speakDate(this.draft.date)} or ${speakDate(d.date)}?`, "confirm_date");
+  }
+
+  private handleConfirmDate(text: string): Promise<ReservationTurn> {
+    const [optA, optB] = this.pendingDateOptions ?? ["", ""];
+    const d = normaliseDate(text, { now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays });
+    let chosen: string | undefined;
+    if (d.date) chosen = d.date; // they named a day (one of the two, or a fresh one)
+    else if (/\b(first|former|one|earlier)\b/i.test(text)) chosen = optA;
+    else if (/\b(second|latter|other|later|last)\b/i.test(text)) chosen = optB;
+    if (!chosen) return Promise.resolve(this.say(`Sorry — ${speakDate(optA)} or ${speakDate(optB)}?`, "confirm_date"));
+    this.draft.date = chosen;
+    this.pendingDateOptions = undefined;
+    this.state = this.resumeAfterDate ?? "COLLECT_TIME";
+    this.resumeAfterDate = undefined;
+    return this.advanceBooking();
+  }
+
+  /** A warm, personal sign-off (Kevin #3 — don't sound clipped/rude). */
+  private warmGoodbye(): string {
+    if (this.reservation) {
+      const r = this.reservation;
+      const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
+      const name = r.customerName ? `, ${r.customerName}` : "";
+      return `Lovely${name} — you're all set. Thanks so much for calling, and we'll see you ${when}. Bye for now!`;
+    }
+    return "No worries — thanks so much for calling, and have a lovely day!";
   }
 
   /** Ask for the next missing booking slot, or run availability once all present. */
@@ -916,8 +1020,9 @@ export class ReservationMachine {
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
     const noted = (r.specialRequests ?? "").trim() ? " I've popped your notes on the booking for the team." : "";
+    const addr = r.customerName ? `, ${r.customerName}` : "";
     return this.say(
-      `Beauty — that's you booked for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll flick you a text to confirm. Anything else, or are you all set?`,
+      `Lovely${addr} — that's you all booked in: a table for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll send you a quick text to confirm. Is there anything else I can help you with?`,
       "confirmed",
       false,
     );
@@ -973,10 +1078,19 @@ export class ReservationMachine {
       this.state = "MODIFY_WHAT";
       return this.say("Sure — what would you like to change?", "modify_what");
     }
-    // "no / that's all / all good / thanks / bye" (or anything unclear): the
-    // booking stands and we ring off warmly.
-    this.state = "END";
-    return this.say("Beauty — you're all set. Thanks for calling, see you then!", "goodbye", true);
+    // Ending: ring off ONLY on a clear "done" — never cut the caller off on a
+    // vague or half-finished reply. An unclear reply gets one gentle re-offer so
+    // they can get their last words in (Kevin #2 eager-ending, #6 ignored-tail).
+    if (detectDone(text) || isNo(text)) {
+      this.state = "END";
+      return this.say(this.warmGoodbye(), "goodbye", true);
+    }
+    this.postConfirmReprompts += 1;
+    if (this.postConfirmReprompts >= 2) {
+      this.state = "END";
+      return this.say(this.warmGoodbye(), "goodbye", true);
+    }
+    return this.say("Sorry, was there anything else I can help you with?", "anything_else");
   }
 
   /** SMS confirmation generated from the stored reservation row (§43-44). */
