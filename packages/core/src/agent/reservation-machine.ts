@@ -161,6 +161,12 @@ export class ReservationMachine {
   private ambiguousParty: number[] | undefined;
   /** The last question we asked, for a gentle silence re-prompt (spec §11). */
   private lastPrompt = "";
+  /** Warm, varied acknowledgers so the flow feels like a friendly receptionist,
+   * not a clipped form (Kevin: don't sound rude/jumpy). Rotated so two in a row
+   * never repeat. */
+  private readonly acks = ["No worries", "Righto", "Beauty", "Too easy", "Lovely", "Not a problem"];
+  private ackIdx = 0;
+  private ack(): string { return this.acks[this.ackIdx++ % this.acks.length]!; }
 
   constructor(private ctx: ReservationContext) {}
 
@@ -378,9 +384,9 @@ export class ReservationMachine {
 
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
-    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure, what day were you after?", "ask_date"); }
-    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say("What time were you thinking?", "ask_time"); }
-    if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say("How many people?", "ask_party"); }
+    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure thing — what day were you thinking?", "ask_date"); }
+    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${this.ack()}. And what time suits you?`, "ask_time"); }
+    if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say(`${this.ack()}. And how many will be joining you?`, "ask_party"); }
     return this.runAvailability();
   }
 
@@ -632,8 +638,8 @@ export class ReservationMachine {
   }
 
   private collectContact(): Promise<ReservationTurn> {
-    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say("That time's free. What name should I put it under?", "ask_name")); }
-    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("And the best mobile number?", "ask_phone")); }
+    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say(`${this.ack()}, that time's free. Can I grab a name for the booking?`, "ask_name")); }
+    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Lovely. And the best mobile to reach you on?", "ask_phone")); }
     return this.finaliseBooking();
   }
 
@@ -722,7 +728,7 @@ export class ReservationMachine {
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
     return this.say(
-      `Done. You're booked for ${r.partySize} ${when}, under ${r.customerName}. I'll text you a confirmation. Anything else, or are you all set?`,
+      `Beauty — that's you booked for ${r.partySize} ${when}, under ${r.customerName}. I'll flick you a text to confirm. Anything else, or are you all set?`,
       "confirmed",
       false,
     );
@@ -752,9 +758,9 @@ export class ReservationMachine {
       return this.say("Sure — what would you like to change?", "modify_what");
     }
     // "no / that's all / all good / thanks / bye" (or anything unclear): the
-    // booking stands and we ring off politely.
+    // booking stands and we ring off warmly.
     this.state = "END";
-    return this.say("Lovely, you're all set. See you then.", "goodbye", true);
+    return this.say("Beauty — you're all set. Thanks for calling, see you then!", "goodbye", true);
   }
 
   /** SMS confirmation generated from the stored reservation row (§43-44). */
