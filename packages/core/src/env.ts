@@ -110,6 +110,13 @@ const envSchema = z.object({
   // TEMP test routing target (owner's own numbers -> this cloud/AU box). Blank
   // = use the code fallback. Remove with the caller-ID routing after cutover.
   TEST_CLOUD_WSS: z.string().default(""),
+  // Cekura external voice-testing caller IDs (comma-separated E.164). Calls FROM
+  // these numbers route to the reservation box and are tagged source=cekura_test.
+  // Set to Cekura's pinned outbound number(s); expandable without a code redeploy.
+  CEKURA_TEST_CALLERS: z.string().default(""),
+  // Basic Auth ("user:pass") guarding the /cekura/chirp raw-PCM WebSocket that
+  // Cekura dials for voice tests. Blank = endpoint disabled (returns 404-ish).
+  CEKURA_CHIRP_AUTH: z.string().default(""),
   APP_URL: z.string().default("http://127.0.0.1:4810"),
   VOICE_WEBSOCKET_URL: z.string().default("ws://127.0.0.1:4811/twilio/relay"),
   VOICE_PUBLIC_URL: z.string().default("http://127.0.0.1:4811"),
@@ -125,6 +132,18 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 export const env: Env = envSchema.parse(process.env);
+
+/** Cekura external voice-testing caller IDs (parsed from CEKURA_TEST_CALLERS).
+ * Calls from these numbers route to the reservation box and get their bookings
+ * tagged source="cekura_test" so test data is isolated and auto-cleanable. */
+export const CEKURA_TEST_CALLERS = new Set(
+  env.CEKURA_TEST_CALLERS.split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+/** True when a caller ID belongs to the Cekura test pool (synthetic test call). */
+export function isCekuraTestCaller(from: string | null | undefined): boolean {
+  return !!from && CEKURA_TEST_CALLERS.has(from);
+}
 
 export function requireEnv(key: keyof Env): string {
   const value = env[key];

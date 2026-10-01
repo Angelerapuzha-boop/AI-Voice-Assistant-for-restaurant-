@@ -470,6 +470,7 @@ export class MediaStreamSession {
         ownerAlertNumber: this.ownerAlertNumber,
         address: restaurant.address,
         phoneDisplay: restaurant.phoneDisplay,
+        source: custom.source || undefined,
       });
     } else {
       let llm: Llm;

@@ -40,6 +40,10 @@ export interface ReservationContext {
   /** For the info layer (spec: factual visiting info, never invented). */
   address?: string;
   phoneDisplay?: string;
+  /** Booking provenance written to reservations.source. Defaults to "phone";
+   * set to "cekura_test" for synthetic Cekura test calls so test bookings are
+   * isolated and auto-cleanable (never mixed with genuine reservations). */
+  source?: string;
 }
 
 export type ReservationState =
@@ -451,6 +455,79 @@ export class ReservationMachine {
     return false;
   }
 
+  /** A time cue is present (so a bare number is an hour, not a party size). */
+  private hasTimeCue(text: string): boolean {
+    return (
+      /\b\d{1,2}\s*(?:am|pm)\b/i.test(text) ||
+      /\b\d{1,2}[:.h]\d{2}\b/.test(text) ||
+      /\bo'?clock\b/i.test(text) ||
+      /\b(?:at|around|about|by|to)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midday|midnight|half|quarter)\b/i.test(text)
+    );
+  }
+
+  /** A LATE correction: the caller restates an ALREADY-captured slot with a
+   * correction cue ("actually make it six", "no sorry make it Thursday") during a
+   * later step. Only an explicit correction retroactively changes a filled slot —
+   * a bare restatement does not. Returns human acks for what changed ([] if
+   * nothing). Disambiguates party vs time: a bare "make it six" is a party change
+   * (no time cue); "eight pm" is a time change (never read as party). (§ corrections) */
+  private applyLateCorrection(text: string): string[] {
+    const acks: string[] = [];
+    const timeCue = this.hasTimeCue(text);
+    const corrCue = /\b(actually|instead|rather|make it|change (?:it|that)(?:\s+to)?|scrap|i mean|not|sorry|no)\b/i.test(text);
+    const partyPhrase = /\b(?:party|group|table|booking)\s+(?:of|for)\s+\w+|\b\w+\s+(?:people|persons?|guests?|pax|adults|of us)\b/i.test(text);
+    // DATE — an explicit correction to a real date token that differs.
+    if (this.draft.date !== undefined && corrCue) {
+      const d = normaliseDate(text, {
+        now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
+      });
+      if (d.date && d.date !== this.draft.date) { this.draft.date = d.date; acks.push(`change it to ${speakDate(d.date)}`); }
+    }
+    // TIME — only with an explicit time cue, differing from the captured time.
+    if (this.draft.time !== undefined && timeCue) {
+      const saved = this.draft.time;
+      this.draft.time = undefined;
+      const got = this.applyTimeFrom(text);
+      if (got && this.draft.time && this.draft.time !== saved) acks.push(speakTime(this.draft.time));
+      else this.draft.time = saved;
+    }
+    // PARTY — a correction cue or party phrase, NO time cue, differing value.
+    if (this.draft.partySize !== undefined && !timeCue && (corrCue || partyPhrase)) {
+      const p = interpretPartySize(text, { expectingParty: true });
+      if (p.kind === "value" && p.value !== this.draft.partySize) {
+        this.draft.partySize = p.value;
+        acks.push(`make it ${numberWord(p.value)}`);
+      }
+    }
+    return acks;
+  }
+
+  /** A direct slot change stated against a CONFIRMED booking (POST_CONFIRM),
+   * e.g. "the party is for six, not four" / "actually make it 8pm" — detected as a
+   * concrete change (not just a vague "modify" intent) and applied to the record. */
+  private extractReservationChange(text: string): { date?: string; time?: string; partySize?: number } {
+    const r = this.reservation!;
+    const changes: { date?: string; time?: string; partySize?: number } = {};
+    const timeCue = this.hasTimeCue(text);
+    const d = normaliseDate(text, {
+      now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
+    });
+    if (d.date && d.date !== r.reservationDate) changes.date = d.date;
+    if (timeCue) {
+      const tm = normaliseTime(text);
+      if (tm.time && tm.time !== r.reservationTime.slice(0, 5)) changes.time = tm.time;
+    }
+    if (!timeCue) {
+      const corrCue = /\b(actually|instead|rather|make it|change (?:it|that)(?:\s+to)?|scrap|i mean|not|different)\b/i.test(text);
+      const partyPhrase = /\b(?:party|group|table|booking)\s+(?:of|for)\s+\w+|\b\w+\s+(?:people|persons?|guests?|pax|adults|of us)\b/i.test(text);
+      if (corrCue || partyPhrase) {
+        const p = interpretPartySize(text, { expectingParty: true });
+        if (p.kind === "value" && p.value !== r.partySize) changes.partySize = p.value;
+      }
+    }
+    return changes;
+  }
+
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
     if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure thing — what day were you thinking?", "ask_date"); }
@@ -484,6 +561,8 @@ export class ReservationMachine {
   }
 
   private handleTime(text: string): Promise<ReservationTurn> {
+    // A late DATE correction said at the time step ("no sorry, make it Thursday").
+    const corrAcks = this.applyLateCorrection(text);
     // Capture an explicit party said alongside the time ("seven, for four people"
     // / "four people at seven") so we never re-ask what was already given.
     this.applyExplicitPartyFrom(text);
@@ -502,6 +581,10 @@ export class ReservationMachine {
     const timeText = this.blankParty(base).trim();
     const r = normaliseTime(timeText || text);
     if (r.time) { this.timeReasks = 0; this.draft.time = r.time; return this.advanceBooking(); }
+    // A date correction with no time yet: acknowledge it and ask the time once.
+    if (corrAcks.length) {
+      return Promise.resolve(this.say(`No worries, I'll ${corrAcks.join(" and ")}. And what time suits you?`, "ask_time"));
+    }
     this.timeReasks++;
     if (this.timeReasks >= 3) return this.beginEscalation();
     return Promise.resolve(this.say(
@@ -712,20 +795,34 @@ export class ReservationMachine {
     return this.finaliseBooking();
   }
 
-  private handleName(text: string): Promise<ReservationTurn> {
+  private async handleName(text: string): Promise<ReservationTurn> {
+    // A late correction to party/date/time said at the name step
+    // ("actually make it six, name's Tara") must be honoured, not dropped.
+    const corrAcks = this.applyLateCorrection(text);
     const name = parseName(text);
     if (!name) {
+      if (corrAcks.length) {
+        // This turn was a correction, not a failed name attempt — don't count it.
+        return this.say(`No worries, I'll ${corrAcks.join(" and ")}. And what name should I put the table under?`, "ask_name");
+      }
       this.nameReasks++;
-      if (this.nameReasks >= 3) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say("Let's try again — what name should I put the table under?", "ask_name")); }
-      return Promise.resolve(this.say(this.nameReasks === 1 ? "I didn't catch the name — just a first name's fine." : "And what name's the booking under?", "ask_name"));
+      if (this.nameReasks >= 3) { this.state = "COLLECT_NAME"; return this.say("Let's try again — what name should I put the table under?", "ask_name"); }
+      return this.say(this.nameReasks === 1 ? "I didn't catch the name — just a first name's fine." : "And what name's the booking under?", "ask_name");
     }
     this.draft.name = name;
-    return this.collectContact();
+    const turn = await this.collectContact();
+    if (corrAcks.length) return { ...turn, say: `No worries, I'll ${corrAcks.join(" and ")}. ${turn.say}` };
+    return turn;
   }
 
   private handlePhone(text: string): Promise<ReservationTurn> {
+    // A late correction to party/date/time said at the phone step is honoured.
+    const corrAcks = this.applyLateCorrection(text);
     const phone = parsePhone(text);
     if (!phone) {
+      if (corrAcks.length) {
+        return Promise.resolve(this.say(`No worries, I'll ${corrAcks.join(" and ")}. And the best mobile to reach you on?`, "ask_phone"));
+      }
       this.phoneReasks++;
       if (this.phoneReasks >= 3) return this.beginEscalation();
       return Promise.resolve(this.say(
@@ -746,7 +843,7 @@ export class ReservationMachine {
     const idempotencyKey = `${this.ctx.callId ?? phone}:${date}:${time}:${partySize}`;
     const input = {
       restaurantId: this.ctx.restaurantId, customerName: name!, customerPhone: phone,
-      date: date!, time: time!, partySize: partySize!, source: "phone",
+      date: date!, time: time!, partySize: partySize!, source: this.ctx.source ?? "phone",
       callId: this.ctx.callId ?? null, idempotencyKey,
       specialRequests: this.draft.specialRequests ?? "",
       seatingPref: this.draft.seatingPref ?? "",
@@ -821,6 +918,33 @@ export class ReservationMachine {
         "cancelled_same_call",
         true,
       );
+    }
+    // A DIRECT change stated against the booking ("make it six, not four" / "can
+    // we do 8pm instead") is applied straight away — don't ignore it or make the
+    // caller re-state it. (§ honour corrections, even after confirmation.)
+    if (this.reservation) {
+      const changes = this.extractReservationChange(text);
+      if (changes.date || changes.time || changes.partySize !== undefined) {
+        const result = await modifyReservation(this.ctx.db, {
+          reservationId: this.reservation.id, changes,
+          hours: this.ctx.hours, settings: this.ctx.settings, timezone: this.ctx.timezone, now: this.ctx.now(),
+        });
+        if ("reservation" in result) {
+          this.reservation = result.reservation;
+          const r = result.reservation;
+          return this.say(
+            `No worries — that's now for ${r.partySize} on ${speakDate(r.reservationDate)} at ${speakTime(r.reservationTime.slice(0, 5))}. Anything else, or are you all set?`,
+            "modified",
+          );
+        }
+        if ("unavailable" in result) {
+          const alts = result.unavailable.alternatives.slice(0, 2).map(speakTime);
+          return this.say(
+            alts.length ? `That's not available, but I've got ${alts.join(" or ")}. Would either work?` : "That's not available I'm afraid. Another time?",
+            "modify_unavailable",
+          );
+        }
+      }
     }
     if (intent === "modify" && this.reservation) {
       this.candidates = [this.reservation];

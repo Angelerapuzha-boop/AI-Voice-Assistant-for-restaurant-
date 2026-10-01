@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import {
   createAnthropicLlm,
+  CEKURA_TEST_CALLERS,
   env,
   getDb,
   getDefaultRestaurant,
@@ -21,6 +22,7 @@ import { conversationRelayTwiml, elevenLabsSipTwiml, mediaStreamTwiml, unavailab
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
 import { RelaySession } from "./relay-session";
 import { AI_FILLERS, MediaStreamSession } from "./media-stream-session";
+import { ChirpSession } from "./chirp-session";
 import { checkBridgeSecret, ElevenLabsBridge, verifyPostCallSignature } from "./elevenlabs-bridge";
 import { startMaintenanceWorker, startSmsWorker } from "./sms-worker";
 import { createSimulatorSession, simulatorTurn } from "./simulator";
@@ -189,14 +191,32 @@ app.post("/twilio/voice", async (req, reply) => {
     // TEMP test routing (2026-09-17): the owner's own phones are sent to the
     // us-east-1 cloud box for live testing; every real customer stays on this
     // (Sydney) box. A non-matching number defaults to Sydney. Remove after cutover.
-    const TEST_CLOUD_CALLERS = new Set(["+61455500001", "+61455500002", "+15550000005"]);
+    // Cekura external voice-testing numbers (CEKURA_TEST_CALLERS env) are merged
+    // in so Cekura's calls reach the reservation box; they're tagged cekura_test.
+    const TEST_CLOUD_CALLERS = new Set([
+      "+61455500001",
+      "+61455500002",
+      "+15550000005",
+      ...CEKURA_TEST_CALLERS,
+    ]);
     // Sydney (ap-southeast-2) all-Australian box: Olivia (Polly) + Transcribe.
     // Env override so the target can change (quick tunnel -> stable) without a
     // code edit; falls back to the current AU quick tunnel.
     const TEST_CLOUD_WSS =
       env.TEST_CLOUD_WSS || "https://bouquet-beast-contain-exposed.trycloudflare.com";
-    const toCloud = TEST_CLOUD_CALLERS.has(params.From ?? "");
+    // Cekura external voice-testing arrives over SIP (via a dedicated Twilio SIP
+    // domain) and self-identifies by the X-Run/Scenario/Result-Id headers Cekura
+    // injects — Twilio surfaces SIP headers as `SipHeader_*` body params. These
+    // calls always go to the reservation box and are tagged source=cekura_test,
+    // regardless of the (SIP) caller ID. (CEKURA_TEST_CALLERS covers any pool
+    // caller ID too, for completeness.)
+    const isCekuraSip = Object.keys(params).some((k) =>
+      /^SipHeader_X-(Run|Scenario|Result)-Id$/i.test(k),
+    );
+    const isCekuraTest = isCekuraSip || CEKURA_TEST_CALLERS.has(params.From ?? "");
+    const toCloud = isCekuraTest || TEST_CLOUD_CALLERS.has(params.From ?? "");
     const wssBase = toCloud ? TEST_CLOUD_WSS : env.VOICE_PUBLIC_URL;
+    const source = isCekuraTest ? "cekura_test" : undefined;
     // Record TEST callers' own calls (consented) so Kevin has audio — started
     // here on the parent call, so it captures the audio whether it streams to
     // prod or the box. Fire-and-forget; never blocks the TwiML. Never real customers.
@@ -206,10 +226,10 @@ app.post("/twilio/voice", async (req, reply) => {
       );
     }
     req.log.info(
-      { callSid, routedTo: toCloud ? "cloud-test" : "sydney" },
+      { callSid, routedTo: toCloud ? "cloud-test" : "sydney", cekuraTest: isCekuraTest },
       "routing call to custom media-stream pipeline",
     );
-    return mediaStreamTwiml({ wssBase, from: params.From ?? "" });
+    return mediaStreamTwiml({ wssBase, from: params.From ?? "", source });
   }
   // ElevenLabs stack: hand the call to the hosted agent over SIP. The
   // Dial action falls back to the relay stack if the SIP leg fails.
@@ -335,6 +355,24 @@ app.get("/twilio/media", { websocket: true }, (socket, req) => {
     createLlm: (model) => createAnthropicLlm(model),
     log: (msg, extra) => req.log.info(extra ?? {}, msg),
   });
+});
+
+// Cekura external voice-testing transport (raw-PCM 16 kHz WebSocket / CHIRP).
+// Guarded by Basic Auth (CEKURA_CHIRP_AUTH="user:pass"); disabled when unset.
+app.get("/cekura/chirp", { websocket: true }, (socket, req) => {
+  const configured = env.CEKURA_CHIRP_AUTH;
+  const expected = configured ? "Basic " + Buffer.from(configured).toString("base64") : "";
+  const got = (req.headers["authorization"] as string | undefined) ?? "";
+  if (!configured || got !== expected) {
+    req.log.warn({ hasAuth: Boolean(got) }, "cekura chirp: rejected (auth)");
+    try {
+      socket.close(1008, "unauthorized");
+    } catch {
+      /* already closed */
+    }
+    return;
+  }
+  new ChirpSession(socket, { log: (msg, extra) => req.log.info(extra ?? {}, msg) });
 });
 
 // ------------------------------------------------------------ simulator (internal)

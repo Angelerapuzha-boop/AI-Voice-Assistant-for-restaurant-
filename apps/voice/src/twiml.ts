@@ -70,12 +70,16 @@ export function conversationRelayTwiml(params: {
  * we own STT, endpointing, the brain and the voice (Sally at fast-path
  * speed). The caller ID is passed as a Stream parameter.
  */
-export function mediaStreamTwiml(params: { wssBase: string; from: string }): string {
+export function mediaStreamTwiml(params: { wssBase: string; from: string; source?: string }): string {
   const wss = `${params.wssBase.replace(/^http/, "ws").replace(/\/$/, "")}/twilio/media`;
+  const sourceParam = params.source
+    ? `<Parameter name="source" value="${xmlEscape(params.source)}" />`
+    : "";
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<Response><Connect><Stream url="${xmlEscape(wss)}">` +
     `<Parameter name="from" value="${xmlEscape(params.from)}" />` +
+    sourceParam +
     `</Stream></Connect></Response>`
   );
 }
