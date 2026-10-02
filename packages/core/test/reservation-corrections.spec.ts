@@ -190,6 +190,32 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
     expect(b!.customerName.toLowerCase()).toContain("yusuf");
     expect(b!.customerName.toLowerCase()).not.toContain("tomorrow");
   });
+
+  it("D3: a stray/duplicated time ('seven pm') at the party step is NOT booked as a party of 7", async () => {
+    const phone = "+61411222861";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven pm"]); // time captured; now at the party step
+    const t = await m.next("seven pm"); // a duplicated time — must NOT become party 7
+    expect(t.say.toLowerCase()).toMatch(/how many|joining you|number|keypad/);
+    await play(m, ["five", "Nadia", "0411 222 861"]);
+    const b = await booking(phone);
+    expect(b).toBeTruthy();
+    expect(b!.partySize).toBe(5); // five, never seven
+    expect(b!.reservationTime.slice(0, 5)).toBe("19:00");
+  });
+
+  it("B1: post-confirm 'actually, it's for half past seven' is a TIME correction, not a party of 7", async () => {
+    const phone = "+61411222862";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "half past seven", "five", "Delia", "0411 222 862"]);
+    const before = await booking(phone);
+    expect(before!.partySize).toBe(5);
+    expect(before!.reservationTime.slice(0, 5)).toBe("19:30");
+    await m.next("actually, it's for half past seven");
+    const after = await booking(phone);
+    expect(after!.partySize).toBe(5); // NOT bumped to 7 by the "seven" in the time
+    expect(after!.reservationTime.slice(0, 5)).toBe("19:30");
+  });
 });
 
 describe("call-quality fixes from listening to recordings (Kevin's 6 items)", () => {

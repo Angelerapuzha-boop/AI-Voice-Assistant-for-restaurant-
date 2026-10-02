@@ -491,14 +491,39 @@ export class ReservationMachine {
     return /\b(today|tonight|tomorrow|tomorro|mon(day)?|tue(s|sday)?|wed(nesday)?|thur?(sday)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?|next\s+week|this\s+week|fortnight|weekend|\b\d{1,2}(st|nd|rd|th)\b|\b\d{1,2}[\/\-]\d{1,2}\b)\b/i.test(text);
   }
 
-  /** A time cue is present (so a bare number is an hour, not a party size). */
+  /** A time cue is present (so a bare number is an hour, not a party size). Spoken
+   * and British forms count too — "seven pm" (word + am/pm), "half past seven",
+   * "quarter to eight", "seven o'clock", "noon" — so a time is never mistaken for
+   * a party size (accent sweep B1/D3: "seven pm"/"half past seven" → party 7). */
   private hasTimeCue(text: string): boolean {
     return (
-      /\b\d{1,2}\s*(?:am|pm)\b/i.test(text) ||
+      /\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:am|pm|a\.m\.|p\.m\.)\b/i.test(text) ||
       /\b\d{1,2}[:.h]\d{2}\b/.test(text) ||
       /\bo'?clock\b/i.test(text) ||
-      /\b(?:at|around|about|by|to)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midday|midnight|half|quarter)\b/i.test(text)
+      /\b(?:half|quarter)\s+(?:past|to|after)\b/i.test(text) ||
+      /\b(?:at|around|about|by|to)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midday|midnight|half|quarter)\b/i.test(text) ||
+      /\b(?:noon|midday|midnight)\b/i.test(text)
     );
+  }
+
+  /** The reply is clearly a TIME ("seven pm", "half past seven", "seven
+   * o'clock") carrying no explicit party phrase — i.e. a misheard or duplicated
+   * time landing on the party step, which must NOT be read as a party size.
+   * (Accent sweep D3: a repeated "Seven PM" was booking a table for 7.) */
+  private isStrayTime(text: string): boolean {
+    // Explicit time MARKERS only — a bare colon form like "4:00" is how STT
+    // renders a spoken party number ("four") at this step (live call 8d55f5f8),
+    // so it must stay a valid party answer, not a stray time.
+    const timeMarker =
+      /\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:am|pm|a\.m\.|p\.m\.)\b/i.test(text) ||
+      /\bo'?clock\b/i.test(text) ||
+      /\b(?:half|quarter)\s+(?:past|to|after)\b/i.test(text) ||
+      /\b(?:noon|midday|midnight)\b/i.test(text);
+    if (!timeMarker) return false;
+    const explicitParty =
+      /\b(?:party|group|table|booking)\s+(?:of|for)\s+\w+/i.test(text) ||
+      /\b\w+\s+(?:people|persons?|guests?|pax|adults|of\s+us|heads|covers)\b/i.test(text);
+    return !explicitParty;
   }
 
   /** A LATE correction: the caller restates an ALREADY-captured slot with a
@@ -743,6 +768,19 @@ export class ReservationMachine {
       if (pick) { this.ambiguousParty = undefined; return this.acceptParty(pick); }
     }
 
+    // A stray/duplicated TIME answer ("seven pm", "half past seven") must not be
+    // booked as a party of 7 — re-ask the head-count instead of taking the hour.
+    if (this.isStrayTime(text)) {
+      this.partyReasks++;
+      if (this.partyReasks >= 3) return this.beginEscalation();
+      return Promise.resolve(this.say(
+        this.partyReasks === 1
+          ? "And how many will be joining you?"
+          : "I didn't catch the number — you can say it, or tap it in on your keypad.",
+        this.partyReasks === 1 ? "ask_party" : "ask_party_dtmf",
+      ));
+    }
+
     const r = interpretPartySize(text, { expectingParty: true });
     if (r.kind === "value") return this.acceptParty(r.value);
     if (r.kind === "ambiguous") {
@@ -780,6 +818,15 @@ export class ReservationMachine {
   /** "Four people?" — resolve the pending candidate (spec §8). A fresh number
    * overrides it; yes accepts; no re-asks; anything else re-confirms once. */
   private handleConfirmParty(text: string): Promise<ReservationTurn> {
+    // A stray time landing on "N people?" is not a new party size — re-confirm.
+    if (this.isStrayTime(text)) {
+      this.partyReasks++;
+      if (this.partyReasks >= 3) return this.beginEscalation();
+      return Promise.resolve(this.say(
+        `Just to check — ${numberWord(this.pendingParty ?? 0)} people? You can say yes, or the number.`,
+        "confirm_party",
+      ));
+    }
     const r = interpretPartySize(text, { expectingParty: true });
     if (r.kind === "value") return this.acceptParty(r.value);
     if (r.kind === "ambiguous") {
