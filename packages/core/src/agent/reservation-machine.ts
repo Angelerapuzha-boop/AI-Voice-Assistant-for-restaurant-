@@ -554,9 +554,16 @@ export class ReservationMachine {
     const r = this.reservation!;
     const changes: { date?: string; time?: string; partySize?: number } = {};
     const timeCue = this.hasTimeCue(text);
-    // Only a REAL date token changes the date — never a bare number ("make it
-    // 8pm" must not become "the 8th").
-    if (this.hasDateWord(text)) {
+    // A clear sign-off is NEVER an edit. A stray temporal word inside a goodbye
+    // ("no, that's all for today", "cheers, see you tomorrow") must not silently
+    // move the booking — only an explicit change cue overrides this. (Accent
+    // sweep K1: "No, that's all for today" was moving the table to today.)
+    const changeCue = /\b(actually|instead|rather|make it|change (?:it|that)(?:\s+to)?|move (?:it|that|the booking)?|push (?:it|that)|switch|shift|reschedule|can we (?:do|make|move|change|get|have|push)|could we|let'?s (?:do|make|move|change)|do it (?:on|for)|book it (?:for|on)|put it (?:to|on))\b/i.test(text);
+    if ((detectDone(text) || isNo(text)) && !changeCue) return changes;
+    // DATE — only a REAL date token AND an explicit change cue (a bare date word
+    // post-confirm is incidental, e.g. "see you Friday"). Never a bare number
+    // ("make it 8pm" must not become "the 8th").
+    if (changeCue && this.hasDateWord(text)) {
       const d = normaliseDate(text, {
         now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays,
       });

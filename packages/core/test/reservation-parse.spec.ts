@@ -194,6 +194,14 @@ describe("parseName", () => {
     expect(parseName("yes")).toBeNull();
     expect(parseName("um")).toBeNull();
   });
+  it("rejects temporal words leaking from an earlier turn (accent sweep L1)", () => {
+    expect(parseName("tomorrow")).toBeNull();
+    expect(parseName("today")).toBeNull();
+    expect(parseName("tonight")).toBeNull();
+    // real names that look temporal stay valid
+    expect(parseName("June")).toBe("June");
+    expect(parseName("May")).toBe("May");
+  });
 });
 
 describe("parsePhone", () => {
@@ -204,5 +212,13 @@ describe("parsePhone", () => {
   });
   it("returns null for too-short input", () => {
     expect(parsePhone("123")).toBeNull();
+  });
+  it("recovers spoken-digit homophones from accented STT (accent sweep B1/D1/L1)", () => {
+    expect(parsePhone("oh four one one, two two two, for for for")).toBe("+61411222444");
+    expect(parsePhone("oh four one one, too too too, ate ate ate")).toBe("+61411222888");
+    expect(parsePhone("oh four one one, three three three, won won won")).toBe("+61411333111");
+  });
+  it("homophones do not fabricate a number from ordinary speech", () => {
+    expect(parsePhone("I'd like a table for two")).toBeNull();
   });
 });

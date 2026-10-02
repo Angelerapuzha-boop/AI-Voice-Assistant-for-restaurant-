@@ -327,6 +327,16 @@ const NAME_FILLER = new Set([
   "can", "could", "would", "please", "put", "down", "as", "for", "under", "name",
 ]);
 
+// Temporal words that are never given names — guards against a date/time token
+// leaking into the name slot when an earlier utterance overlaps the name step
+// (accent sweep L1: "tomorrow" was being stored as the customer's name). Month
+// and weekday words are deliberately NOT here — "May", "June", "Sunday" are real
+// first names.
+const TEMPORAL_NON_NAME = new Set([
+  "today", "tonight", "tomorrow", "tomorro", "yesterday", "weekend",
+  "morning", "afternoon", "evening", "midday", "noon", "midnight",
+]);
+
 export function parseName(text: string): string | null {
   let t = text.trim().replace(/[.,!?]/g, "");
   t = t.replace(
@@ -345,6 +355,7 @@ export function parseName(text: string): string | null {
   words = words.filter((w) => !NAME_FILLER.has(w.toLowerCase()));
   if (words.length < 1 || words.length > 3) return null;
   if (words.some((w) => NON_NAME.has(w.toLowerCase()))) return null;
+  if (words.some((w) => TEMPORAL_NON_NAME.has(w.toLowerCase()))) return null;
   if (words.every((w) => w.replace(/[^a-z]/gi, "").length <= 1)) return null;
   const joined = words.join(" ");
   if (joined.length < 2 || joined.length > 40) return null;
@@ -352,8 +363,17 @@ export function parseName(text: string): string | null {
 }
 
 const DIGIT_WORDS: Record<string, string> = {
-  zero: "0", oh: "0", o: "0", one: "1", two: "2", three: "3", four: "4",
-  five: "5", six: "6", seven: "7", eight: "8", nine: "9", double: "", triple: "",
+  zero: "0", oh: "0", o: "0", ought: "0", nought: "0",
+  one: "1", won: "1",
+  two: "2", too: "2", to: "2",
+  three: "3", tree: "3",
+  four: "4", for: "4", fore: "4",
+  five: "5", fife: "5",
+  six: "6",
+  seven: "7",
+  eight: "8", ate: "8",
+  nine: "9", niner: "9",
+  double: "", triple: "",
 };
 
 /**

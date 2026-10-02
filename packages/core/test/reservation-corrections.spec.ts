@@ -154,6 +154,44 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
   });
 });
 
+describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => {
+  it("K1: 'no, that's all for today' at post-confirm ENDS the call and does NOT move the booking to today", async () => {
+    const phone = "+61411222851";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Priya", "0411 222 851"]);
+    const before = await booking(phone);
+    expect(before!.reservationDate).toBe(isoDate(1)); // tomorrow
+    const turn = await m.next("No, that's all for today. Thank you. Goodbye!");
+    const after = await booking(phone);
+    expect(after!.reservationDate).toBe(isoDate(1)); // STILL tomorrow — a sign-off is not a date edit
+    expect(after!.reservationTime).toBe(before!.reservationTime);
+    expect(turn.endCall).toBe(true);
+  });
+
+  it("K1b: a GENUINE post-confirm date change WITH a change cue still applies", async () => {
+    const phone = "+61411222852";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dev", "0411 222 852"]);
+    const before = await booking(phone);
+    await m.next("actually, can we move it to Saturday");
+    const after = await booking(phone);
+    expect(dow(after!.reservationDate)).toBe(6); // Saturday
+    expect(after!.reservationDate).not.toBe(before!.reservationDate);
+  });
+
+  it("L1: a date word ('tomorrow') is never stored as the customer name", async () => {
+    const phone = "+61411222853";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two"]); // now at the name step
+    await m.next("tomorrow"); // must be rejected as a name, not stored
+    await play(m, ["Yusuf", "0411 222 853"]);
+    const b = await booking(phone);
+    expect(b).toBeTruthy();
+    expect(b!.customerName.toLowerCase()).toContain("yusuf");
+    expect(b!.customerName.toLowerCase()).not.toContain("tomorrow");
+  });
+});
+
 describe("call-quality fixes from listening to recordings (Kevin's 6 items)", () => {
   it("#1 repeat request after confirmation reads the booking back and stays on the line", async () => {
     const phone = "+61411222821";
