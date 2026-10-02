@@ -104,6 +104,14 @@ const ENDPOINT_SILENCE_MS = Number(process.env.ENDPOINT_SILENCE_MS) || 900;
 // coming, so a finished phrase still endpoints fast (no added lag). Kevin
 // 2026-09-24: curveballs/changes need space or the conversation overlaps.
 const ENDPOINT_HESITATION_MS = Number(process.env.ENDPOINT_HESITATION_MS) || 2000;
+// Fast-complete endpointing (Kevin 2026-10-02): when the caller's partial reads as
+// a CLEARLY COMPLETE answer (a confirmation/closure, or a fully-formed date / time
+// with am·pm·o'clock·half-past / party-with-noun / 10-digit mobile) AND it is not
+// endsMidThought, reply sooner than the cautious base — "no gap once they've
+// finished". Deliberately conservative: a BARE number ("seven", "four") is NOT
+// complete (it may be "seven thirty" / an item still coming), so it keeps the base
+// wait. Env-overridable; endsMidThought still wins (it's checked first).
+const FAST_COMPLETE_MS = Number(process.env.ENDPOINT_FAST_MS) || 650;
 // Bare quantity words that, when they END an utterance mid-order, mean an item
 // is still coming ("I'll get TWO…", "gimme THREE…") — hold instead of cutting in.
 // Guarded in endsMidThought so a complete qty answer ("make it two", bare "two")
@@ -122,6 +130,9 @@ const INCOMPLETE_TAIL = new Set([
   // clearly unfinished ("a couple OF…", "one FOR…", "chuck SOME…", "I'll get TO…")
   "and", "or", "plus", "with", "n", "a", "an", "the", "for", "of", "some", "to",
   "into", "just", "like",
+  // trailing time lead-ins — a time is still coming ("tomorrow AT…", "around…",
+  // "book it BY…") so don't fast-endpoint on the date/word before it.
+  "at", "around", "about", "by",
   // change / continuation / ordering leads — a verb with no object yet
   "actually", "maybe", "make", "change", "swap", "gonna", "wanna", "get", "want",
   "grab", "add", "having", "getting", "gimme", "lemme", "chuck", "throw", "hook",
@@ -157,6 +168,31 @@ export function endsMidThought(text: string): boolean {
   // "just two", or a bare "two" answering "how many?").
   if (words.length >= 2 && NUMBER_WORDS.has(last) && !QTY_COMPLETE_LEADS.has(words[0]!)) return true;
   return words.length <= 3 && QUESTION_OPENERS.has(words[0]!);
+}
+
+/** The partial reads as a CLEARLY COMPLETE answer, so we can reply sooner
+ * (FAST_COMPLETE_MS) instead of the cautious base wait — without the cut-off risk
+ * of a blanket lower endpoint. Conservative on purpose: only fires on strong
+ * positive signals, and NEVER on a bare number (which may still be mid-time /
+ * mid-count). The caller is checked against endsMidThought() FIRST, so a trailing
+ * connector/hesitation always wins over this. */
+export function looksComplete(text: string): boolean {
+  const t = text.toLowerCase().replace(/[^a-z0-9\s:']/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  // confirmations / closures / negations — clearly terminal
+  if (/\b(yes|yeah|yep|yup|nope|nah|no thanks?|no thank you|correct|exactly|that'?s right|that'?s correct|that'?s all|that'?s it|that'?s everything|nothing else|that'?s me|all good|we'?re good|all set|go ahead|sounds good|please do|book it|lock it in|confirm|cancel it|cancel that)\b/.test(t)) return true;
+  // party with an explicit noun ("four people", "party of four", "two of us", "for four")
+  if (/\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:people|persons?|guests?|pax|adults|of us)\b/.test(t)) return true;
+  if (/\b(?:party|group|table|booking)\s+(?:of|for)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/.test(t)) return true;
+  // a fully-formed time (am/pm, o'clock, half/quarter past·to, noon, HH:MM)
+  if (/\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:am|pm|a\.?m\.?|p\.?m\.?)\b/.test(t)) return true;
+  if (/\bo'?clock\b/.test(t) || /\b(?:half|quarter)\s+(?:past|to)\b/.test(t) || /\b(noon|midday|midnight)\b/.test(t) || /\b\d{1,2}[:.]\d{2}\b/.test(t)) return true;
+  // a clear calendar day ("tomorrow", "friday", "next tuesday", "the 5th")
+  if (/\b(today|tonight|tomorrow|this (?:evening|weekend|week)|next (?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t)) return true;
+  if (/\b\d{1,2}(?:st|nd|rd|th)\b/.test(t)) return true;
+  // a complete AU mobile gathered (10+ digits)
+  if (t.replace(/\D/g, "").length >= 10) return true;
+  return false;
 }
 // Barge-in must be the CALLER genuinely talking over us — not the quieter echo
 // of our own audio coming back on a two-way line, nor a short noise blip. So it
@@ -656,11 +692,15 @@ export class MediaStreamSession {
       }
     } else if (this.inUtterance) {
       this.silenceMs += FRAME_MS;
-      // Hold longer when the caller trailed off mid-thought/mid-change, so we
-      // don't cut across them — otherwise endpoint at the normal (fast) pause.
-      const threshold = endsMidThought(this.scribe?.peekPartial() ?? "")
+      // Three-way endpoint wait: hold LONGER when the caller trailed off
+      // mid-thought/mid-change; reply SOONER when the partial is a clearly
+      // complete answer; otherwise the cautious base pause. endsMidThought wins.
+      const partial = this.scribe?.peekPartial() ?? "";
+      const threshold = endsMidThought(partial)
         ? ENDPOINT_HESITATION_MS
-        : ENDPOINT_SILENCE_MS;
+        : looksComplete(partial)
+          ? FAST_COMPLETE_MS
+          : ENDPOINT_SILENCE_MS;
       if (this.silenceMs >= threshold && !this.awaitingReply && !this.ending) {
         this.inUtterance = false;
         this.speechMs = 0;

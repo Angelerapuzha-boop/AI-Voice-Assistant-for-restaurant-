@@ -13,6 +13,7 @@ import {
 import { muLawFrameRms, muLawToPcm16, pcm16ToBytes, pcm16ToMuLaw, upsample8to16 } from "./audio";
 import { openStt, openTts, type SttStream } from "./voice-providers";
 import { type SallyStream } from "./elevenlabs-stream";
+import { endsMidThought, looksComplete } from "./media-stream-session";
 
 /**
  * CHIRP session — Cekura external voice-testing transport for the reservation
@@ -54,6 +55,10 @@ const ENDPOINT_SILENCE_MS = (() => {
   const v = Number(process.env.CHIRP_ENDPOINT_SILENCE_MS) || Number(process.env.ENDPOINT_SILENCE_MS) || 900;
   return Math.min(3000, Math.max(200, v));
 })();
+// Adaptive endpointing (mirrors the Twilio/media-stream path): reply sooner on a
+// clearly-complete answer, hold longer on a mid-thought trail-off.
+const FAST_COMPLETE_MS = Number(process.env.CHIRP_ENDPOINT_FAST_MS) || Number(process.env.ENDPOINT_FAST_MS) || 650;
+const ENDPOINT_HESITATION_MS = Number(process.env.ENDPOINT_HESITATION_MS) || 2000;
 const MIN_SPEECH_MS = 200; // ignore a lone noisy frame
 
 /** Little-endian PCM16 bytes -> Int16Array. */
@@ -197,7 +202,13 @@ export class ChirpSession {
   /** Wall-clock endpoint check (runs on a timer): the caller has stopped. */
   private checkEndpoint(): void {
     if (!this.inUtterance || this.busy || this.ended || !this.greetingSent) return;
-    if (Date.now() - this.lastSpeechAt < ENDPOINT_SILENCE_MS) return;
+    const partial = this.stt?.peekPartial?.() ?? "";
+    const threshold = endsMidThought(partial)
+      ? ENDPOINT_HESITATION_MS
+      : looksComplete(partial)
+        ? FAST_COMPLETE_MS
+        : ENDPOINT_SILENCE_MS;
+    if (Date.now() - this.lastSpeechAt < threshold) return;
     const hadSpeech = this.speechMs >= MIN_SPEECH_MS;
     this.inUtterance = false;
     this.speechMs = 0;

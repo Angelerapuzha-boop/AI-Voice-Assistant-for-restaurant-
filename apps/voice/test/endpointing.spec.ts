@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { endsMidThought } from "../src/media-stream-session";
+import { endsMidThought, looksComplete } from "../src/media-stream-session";
 
 // Adaptive endpointing: a caller who trails off mid-thought/mid-change gets
 // extra room to finish, so the assistant doesn't talk over their change of mind
@@ -60,6 +60,36 @@ describe("endsMidThought (give space for a change of mind)", () => {
       "",
     ]) {
       expect(endsMidThought(t), t).toBe(false);
+    }
+  });
+
+  it("holds on a trailing time lead-in (a time is still coming)", () => {
+    for (const t of ["tomorrow at", "book it around", "friday by", "about"]) {
+      expect(endsMidThought(t), t).toBe(true);
+    }
+  });
+});
+
+// Fast-complete: reply sooner when the partial is CLEARLY a complete answer, but
+// never on a bare number (which may still be "seven thirty" / an item still coming).
+describe("looksComplete (reply sooner once the caller has clearly finished)", () => {
+  it("is complete on a fully-formed answer", () => {
+    for (const t of [
+      "yes please", "no thanks", "that's all", "that's right", "go ahead", "lock it in", "cancel that",
+      "tomorrow", "this friday", "next tuesday", "the 5th",
+      "seven pm", "7 pm", "half past seven", "seven o'clock", "noon", "7:30",
+      "four people", "party of four", "two of us", "a table for four",
+      "0411 222 333", "it's 0412 345 678",
+    ]) {
+      expect(looksComplete(t), t).toBe(true);
+    }
+  });
+
+  it("is NOT complete on a bare number or an unfinished phrase (keeps the safe wait)", () => {
+    for (const t of [
+      "seven", "four", "about", "um", "and", "make it", "i'll have the", "can i get a", "",
+    ]) {
+      expect(looksComplete(t), t).toBe(false);
     }
   });
 });
