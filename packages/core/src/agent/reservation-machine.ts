@@ -654,8 +654,10 @@ export class ReservationMachine {
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
     if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Of course, I'd be glad to help. What day were you thinking of coming in?", "ask_date"); }
-    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${this.ack()}. And what time were you thinking of coming in?`, "ask_time"); }
-    if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say(`${this.ack()}. And how many will be joining you?`, "ask_party"); }
+    // Echo the day back as we move to the time (reference-style confirmation).
+    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${speakDate(this.draft.date)}, lovely. And what time were you thinking of coming in?`, "ask_time"); }
+    // Echo the time back as we move to the party size.
+    if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say(`${speakTime(this.draft.time)}, wonderful. And how many will be joining you?`, "ask_party"); }
     return this.runAvailability();
   }
 
@@ -913,7 +915,15 @@ export class ReservationMachine {
   }
 
   private collectContact(): Promise<ReservationTurn> {
-    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say(`${this.ack()} — that time's free. May I grab a name for the booking?`, "ask_name")); }
+    if (!this.draft.name) {
+      this.state = "COLLECT_NAME";
+      // Restate the whole booking before taking the name (reference-style), so a
+      // mis-heard detail is caught here and the caller feels looked-after.
+      const restate = this.draft.date && this.draft.time && this.draft.partySize !== undefined
+        ? `Lovely — so that's a table for ${numberWord(this.draft.partySize)} ${speakWhen(this.draft.date, this.draft.time, this.ctx.now(), this.ctx.timezone)}. That time's free — may I grab a name for the booking?`
+        : `${this.ack()} — that time's free. May I grab a name for the booking?`;
+      return Promise.resolve(this.say(restate, "ask_name"));
+    }
     if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Wonderful. And the best number to reach you on?", "ask_phone")); }
     return this.finaliseBooking();
   }
