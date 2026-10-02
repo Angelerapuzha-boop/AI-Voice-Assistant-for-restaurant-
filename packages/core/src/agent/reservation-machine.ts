@@ -183,7 +183,7 @@ export class ReservationMachine {
   /** Warm, varied acknowledgers so the flow feels like a friendly receptionist,
    * not a clipped form (Kevin: don't sound rude/jumpy). Rotated so two in a row
    * never repeat. */
-  private readonly acks = ["No worries", "Righto", "Beauty", "Too easy", "Lovely", "Not a problem"];
+  private readonly acks = ["Lovely", "Of course", "Wonderful", "No worries", "Certainly", "That's lovely"];
   private ackIdx = 0;
   private ack(): string { return this.acks[this.ackIdx++ % this.acks.length]!; }
 
@@ -193,7 +193,7 @@ export class ReservationMachine {
    * short, warm, reservations-framed. Recording notice folded in when required. */
   opening(opts: { recordingNotice?: boolean } = {}): string {
     const notice = opts.recordingNotice ? " This call may be recorded." : "";
-    const line = `Hi, thanks for calling ${this.ctx.restaurantName}.${notice} Are you looking to book a table?`;
+    const line = `Hello, and thanks so much for calling ${this.ctx.restaurantName}.${notice} I'd be happy to help — are you looking to book a table?`;
     this.lastPrompt = "Are you looking to book a table?";
     return line;
   }
@@ -646,15 +646,15 @@ export class ReservationMachine {
       const r = this.reservation;
       const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
       const name = r.customerName ? `, ${r.customerName}` : "";
-      return `Lovely${name} — you're all set. Thanks so much for calling, and we'll see you ${when}. Bye for now!`;
+      return `It's my pleasure${name} — you're all set, and we'll see you ${when}. Have a wonderful day, and thanks so much for calling!`;
     }
-    return "No worries — thanks so much for calling, and have a lovely day!";
+    return "It's my pleasure — have a wonderful day, and thanks so much for calling!";
   }
 
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
-    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Sure thing — what day were you thinking?", "ask_date"); }
-    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${this.ack()}. And what time suits you?`, "ask_time"); }
+    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Of course, I'd be glad to help. What day were you thinking of coming in?", "ask_date"); }
+    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${this.ack()}. And what time were you thinking of coming in?`, "ask_time"); }
     if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say(`${this.ack()}. And how many will be joining you?`, "ask_party"); }
     return this.runAvailability();
   }
@@ -706,7 +706,7 @@ export class ReservationMachine {
     if (r.time) { this.timeReasks = 0; this.draft.time = r.time; return this.advanceBooking(); }
     // A date correction with no time yet: acknowledge it and ask the time once.
     if (corrAcks.length) {
-      return Promise.resolve(this.say(`No worries, I'll ${corrAcks.join(" and ")}. And what time suits you?`, "ask_time"));
+      return Promise.resolve(this.say(`Of course, I'll ${corrAcks.join(" and ")}. And what time were you thinking of coming in?`, "ask_time"));
     }
     this.timeReasks++;
     if (this.timeReasks >= 3) return this.beginEscalation();
@@ -913,8 +913,8 @@ export class ReservationMachine {
   }
 
   private collectContact(): Promise<ReservationTurn> {
-    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say(`${this.ack()}, that time's free. Can I grab a name for the booking?`, "ask_name")); }
-    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Lovely. And the best mobile to reach you on?", "ask_phone")); }
+    if (!this.draft.name) { this.state = "COLLECT_NAME"; return Promise.resolve(this.say(`${this.ack()} — that time's free. May I grab a name for the booking?`, "ask_name")); }
+    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Wonderful. And the best number to reach you on?", "ask_phone")); }
     return this.finaliseBooking();
   }
 
@@ -946,7 +946,7 @@ export class ReservationMachine {
     const phone = parsePhone(text);
     if (!phone) {
       if (corrAcks.length) {
-        return Promise.resolve(this.say(`No worries, I'll ${corrAcks.join(" and ")}. And the best mobile to reach you on?`, "ask_phone"));
+        return Promise.resolve(this.say(`Of course, I'll ${corrAcks.join(" and ")}. And the best number to reach you on?`, "ask_phone"));
       }
       this.phoneReasks++;
       if (this.phoneReasks >= 3) return this.beginEscalation();
