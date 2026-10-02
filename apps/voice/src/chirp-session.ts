@@ -46,7 +46,14 @@ const RESERVATION_KEYTERMS = [
 // the adapter owns VAD exactly like the Twilio media-stream path does.
 const SPEECH_RMS = 550; // above this = voice present
 const BARGE_RMS = 1600; // caller clearly talking over the agent -> interrupt
-const ENDPOINT_SILENCE_MS = Number(process.env.ENDPOINT_SILENCE_MS) || 900;
+// CHIRP-only endpoint override (CHIRP_ENDPOINT_SILENCE_MS) so the test rig's
+// endpoint can be swept independently of the live Twilio/media-stream path (which
+// keeps its own hand-tuned ENDPOINT_SILENCE_MS=900). Falls back to the shared var,
+// then 900. Clamped to a sane range.
+const ENDPOINT_SILENCE_MS = (() => {
+  const v = Number(process.env.CHIRP_ENDPOINT_SILENCE_MS) || Number(process.env.ENDPOINT_SILENCE_MS) || 900;
+  return Math.min(3000, Math.max(200, v));
+})();
 const MIN_SPEECH_MS = 200; // ignore a lone noisy frame
 
 /** Little-endian PCM16 bytes -> Int16Array. */
