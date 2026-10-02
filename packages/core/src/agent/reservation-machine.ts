@@ -59,6 +59,7 @@ export type ReservationState =
   | "COLLECT_NAME"
   | "COLLECT_PHONE"
   | "CONFIRM_DETAILS"
+  | "CONFIRM_BOOKING_CHANGE"
   | "CONFIRMED"
   | "POST_CONFIRM"
   | "FIND_BOOKING"
@@ -174,6 +175,7 @@ export class ReservationMachine {
   private dateReasks = 0;
   private timeReasks = 0;
   private partyReasks = 0;
+  private confirmReasks = 0;
   /** A party size we heard but aren't sure of, awaiting a yes/no ("Four people?"). */
   private pendingParty: number | undefined;
   /** Two plausible counts from "four or five", awaiting which one. */
@@ -290,6 +292,8 @@ export class ReservationMachine {
       case "OFFER_ALTERNATIVES": return this.handleAlternatives(text);
       case "COLLECT_NAME": return this.handleName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
+      case "CONFIRM_DETAILS": return this.handleConfirmBooking(text);
+      case "CONFIRM_BOOKING_CHANGE": return this.handleConfirmBookingChange(text);
       case "POST_CONFIRM": return this.handlePostConfirm(text);
       case "FIND_BOOKING": return this.handleFindBooking(text);
       case "CANCEL_CONFIRM": return this.handleCancelConfirm(text);
@@ -979,7 +983,81 @@ export class ReservationMachine {
       return Promise.resolve(this.say(restate, "ask_name"));
     }
     if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Wonderful. And the best number to reach you on?", "ask_phone")); }
-    return this.finaliseBooking();
+    return this.askToConfirmBooking();
+  }
+
+  /** Read the full booking back and ask the caller to confirm (or change / cancel)
+   * BEFORE it's created — a clear spoken confirm/cancel moment with an unhurried
+   * gap, rather than auto-booking and rushing to hang up (Kevin: "no gap for the
+   * customer to say confirmed or cancelling"). The booking is created only on a
+   * clear yes. */
+  private askToConfirmBooking(): Promise<ReservationTurn> {
+    this.state = "CONFIRM_DETAILS";
+    const when = speakWhen(this.draft.date!, this.draft.time!, this.ctx.now(), this.ctx.timezone);
+    const who = this.draft.name ? `, ${this.draft.name}` : "";
+    return Promise.resolve(this.say(
+      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}. Shall I lock that in for you?`,
+      "confirm_booking",
+    ));
+  }
+
+  /** The confirm beat (CONFIRM_DETAILS): create ONLY on a clear yes; honour a
+   * direct change ("no, make it six" / "actually 8pm"); let a plain "no" open a
+   * change; cancel outright never books. */
+  private async handleConfirmBooking(text: string): Promise<ReservationTurn> {
+    // A direct change stated at the confirm step — adjust, re-check availability,
+    // and re-read before booking.
+    const { acks: corrAcks } = this.applyLateCorrection(text);
+    if (corrAcks.length) {
+      this.confirmReasks = 0;
+      const t = await this.runAvailability();
+      return { ...t, say: `No worries, I'll ${corrAcks.join(" and ")}. ${t.say}` };
+    }
+    // Cancel outright — never create a booking.
+    if (detectIntent(text) === "cancel" || /\b(cancel|don'?t book|do not book|scrap it|forget it|never mind|changed my mind|not anymore)\b/i.test(text)) {
+      this.state = "END";
+      return this.say("No worries — I won't lock anything in. Give us a call back anytime and we'll sort your table. Cheers!", "booking_abandoned", true);
+    }
+    // Clear yes — create it now.
+    if (isYes(text)) return this.finaliseBooking();
+    // Plain "no" with no specific change — ask what they'd like to change.
+    if (isNo(text)) {
+      this.state = "CONFIRM_BOOKING_CHANGE";
+      return this.say("No worries — what would you like to change? The day, the time, or the number of people?", "confirm_change");
+    }
+    // Unclear — ask once more, then go ahead rather than strand a complete booking.
+    this.confirmReasks++;
+    if (this.confirmReasks >= 2) return this.finaliseBooking();
+    return this.say("Shall I go ahead and lock that in for you?", "confirm_booking");
+  }
+
+  /** After a plain "no" at the confirm beat: apply the change the caller names
+   * (bare values are fine here — they were asked what to change), re-validate, and
+   * re-read for confirmation. */
+  private handleConfirmBookingChange(text: string): Promise<ReservationTurn> {
+    if (detectIntent(text) === "cancel" || /\b(cancel|don'?t book|forget it|never mind|changed my mind)\b/i.test(text)) {
+      this.state = "END";
+      return Promise.resolve(this.say("No worries — I won't lock anything in. Call us back anytime. Cheers!", "booking_abandoned", true));
+    }
+    let changed = false;
+    if (this.hasDateWord(text)) {
+      const d = normaliseDate(text, { now: this.ctx.now(), timezone: this.ctx.timezone, maxAdvanceDays: this.ctx.settings.maxAdvanceDays });
+      if (d.date && d.date !== this.draft.date) { this.draft.date = d.date; changed = true; }
+    }
+    if (this.hasTimeCue(text)) {
+      const r = normaliseTime(text);
+      if (r.time && r.time !== this.draft.time) { this.draft.time = r.time; changed = true; }
+    } else {
+      const p = interpretPartySize(text, { expectingParty: true });
+      if (p.kind === "value" && p.value !== this.draft.partySize) { this.draft.partySize = p.value; changed = true; }
+    }
+    if (!changed) {
+      this.confirmReasks++;
+      if (this.confirmReasks >= 3) return this.askToConfirmBooking();
+      return Promise.resolve(this.say("Sure — what would you like to change: the day, the time, or the number of people?", "confirm_change"));
+    }
+    this.confirmReasks = 0;
+    return this.runAvailability(); // re-validate the new slot, then re-confirm
   }
 
   private async handleName(text: string): Promise<ReservationTurn> {
@@ -1022,7 +1100,7 @@ export class ReservationMachine {
       ));
     }
     this.draft.phone = phone;
-    return this.finaliseBooking();
+    return this.collectContact();
   }
 
   private async finaliseBooking(): Promise<ReservationTurn> {
