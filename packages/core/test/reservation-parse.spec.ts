@@ -202,6 +202,16 @@ describe("parseName", () => {
     expect(parseName("June")).toBe("June");
     expect(parseName("May")).toBe("May");
   });
+  it("rejects acknowledgements given instead of a name (CHIRP run 3976308)", () => {
+    expect(parseName("Oh, that's great. Cheers.")).toBeNull();
+    expect(parseName("no worries")).toBeNull();
+    expect(parseName("lovely, thanks")).toBeNull();
+    expect(parseName("brilliant")).toBeNull();
+    expect(parseName("uh-huh")).toBeNull();
+    // real names still parse, including after a lead-in
+    expect(parseName("it's Marcus")).toBe("Marcus");
+    expect(parseName("Priya")).toBe("Priya");
+  });
 });
 
 describe("parsePhone", () => {

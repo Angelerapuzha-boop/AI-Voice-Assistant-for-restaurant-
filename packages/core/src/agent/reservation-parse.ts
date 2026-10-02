@@ -312,6 +312,14 @@ const NON_NAME = new Set([
   // "can we sit near the window" doesn't get accepted as a name.
   "can", "we", "us", "sit", "near", "by", "could", "would", "want", "like",
   "around", "have", "get", "something", "there", "here",
+  // acknowledgements / fillers a caller gives INSTEAD of a name ("oh, that's
+  // great, cheers" / "no worries" / "lovely, thanks") — never a name, so re-ask
+  // rather than booking the ack as the customer name (CHIRP run 3976308 booked
+  // "That's Great Cheers"; also the British "Uh-huh"/"Brilliant" artifacts).
+  "oh", "that", "thats", "cheers", "great", "lovely", "perfect", "wonderful",
+  "brilliant", "awesome", "excellent", "fantastic", "marvellous", "marvelous",
+  "ta", "cool", "righto", "right", "worries", "good", "grand", "nice", "beauty",
+  "beaut", "ripper", "yay", "huh", "uhhuh", "uh-huh", "sorry", "alright",
 ]);
 
 /**
