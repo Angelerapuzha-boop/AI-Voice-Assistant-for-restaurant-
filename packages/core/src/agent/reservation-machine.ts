@@ -272,6 +272,13 @@ export class ReservationMachine {
       await this.persistExtrasToReservation();
       return this.say(`${extraAck}. Anything else, or are you all set?`, "note_added");
     }
+    // A request volunteered at the confirm beat ("actually, by the window") — note
+    // it warmly and re-read the booking back (reference-style: sounds like it's
+    // listening), rather than ignoring it.
+    if (extraAck && this.state === "CONFIRM_DETAILS") {
+      const t = await this.askToConfirmBooking();
+      return { ...t, say: `${extraAck}. ${t.say}` };
+    }
 
     const before = this.state;
     const turn = await this.route(cleaned || text);
@@ -315,7 +322,7 @@ export class ReservationMachine {
       this.draft.specialRequests = [this.draft.specialRequests, seat].filter(Boolean).join("; ");
       if (seat.startsWith("outdoor")) this.draft.seatingPref = "outdoor";
       else if (seat.startsWith("indoor")) this.draft.seatingPref = "indoor";
-      acks.push(`No worries, I'll note a request for a ${seat}`);
+      acks.push(`A ${seat} sounds lovely — I'll make a note of that`);
       cleaned = cleaned
         .replace(/\b(?:by|near|next to|beside)?\s*(?:the\s+)?window(?:\s+seat|\s+table)?\b/gi, " ")
         .replace(/\b(?:outside|outdoors?|out door|alfresco|courtyard|patio|garden)\b/gi, " ")
@@ -325,7 +332,7 @@ export class ReservationMachine {
     const special = detectSpecialRequest(text);
     if (special && !(this.draft.specialRequests ?? "").includes(special)) {
       this.draft.specialRequests = [this.draft.specialRequests, special].filter(Boolean).join("; ");
-      acks.push(`I've made a note — ${special}`);
+      acks.push(`Of course — I've noted that: ${special}`);
       cleaned = cleaned
         .replace(/\b(?:i'?m|we'?re|i am)?\s*allerg(?:ic|y)(?:\s+to)?\s+[a-z\s]*?(?=[.,]|$|\bplease\b|\band\b|\bthanks?\b)/gi, " ")
         .replace(/\b(vegan|vegetarian|veggie|gluten[\s-]?free|coeliac|celiac|halal|kosher|high\s?chair|highchair|wheelchair|accessible|accessibility|mobility|birthday|anniversary|engagement|celebration|celebrating)\b/gi, " ");
@@ -996,9 +1003,17 @@ export class ReservationMachine {
     const when = speakWhen(this.draft.date!, this.draft.time!, this.ctx.now(), this.ctx.timezone);
     const who = this.draft.name ? `, ${this.draft.name}` : "";
     return Promise.resolve(this.say(
-      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}. Shall I lock that in, or would you like to change anything?`,
+      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}.${this.notesPhrase(this.draft.specialRequests)} Shall I lock that in, or is there anything else — a seating or dietary note?`,
       "confirm_booking",
     ));
+  }
+
+  /** Read captured notes back warmly (reference-style "I've noted…"), or "" when
+   * there are none. "window seat; no shrimp" -> " I've noted a window seat, and no shrimp." */
+  private notesPhrase(notes?: string): string {
+    const n = (notes ?? "").trim();
+    if (!n) return "";
+    return ` I've noted ${n.replace(/;\s*/g, ", and ")}.`;
   }
 
   /** The confirm beat (CONFIRM_DETAILS): create ONLY on a clear yes; honour a
@@ -1179,7 +1194,7 @@ export class ReservationMachine {
     this.state = "POST_CONFIRM";
     void this.sendConfirmationSms(r); // §43, best-effort, never blocks the reply
     const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
-    const noted = (r.specialRequests ?? "").trim() ? " I've popped your notes on the booking for the team." : "";
+    const noted = this.notesPhrase(r.specialRequests);
     const addr = r.customerName ? `, ${r.customerName}` : "";
     return this.say(
       `Lovely${addr} — that's you all booked in: a table for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll send you a quick text to confirm. Is there anything else I can help you with?`,
