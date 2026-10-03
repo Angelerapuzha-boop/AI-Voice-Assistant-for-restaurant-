@@ -288,6 +288,31 @@ export class ReservationMachine {
     // gracious: hold once, then offer a call-back rather than barging on (Kevin #4).
     if (this.state !== "END" && this.state !== "GREETING" && detectBusy(text)) return this.handleBusy();
 
+    // A clear "cancel / forget it" at ANY point of an in-progress booking — handle
+    // it like a real receptionist would: drop it on the spot (Kevin: "if he
+    // suddenly says cancel, cancel it"). If the booking was already created this
+    // call, cancel the record; otherwise just don't book. (The cancel-an-EXISTING-
+    // booking flow at the greeting is left to detectIntent, hence GREETING + the
+    // find/cancel/modify states are excluded here.)
+    const abandonInProgress =
+      !["GREETING", "END", "FIND_BOOKING", "CANCEL_CONFIRM", "MODIFY_WHAT", "CONFIRM_DATE"].includes(this.state) &&
+      /\b(cancel|scrap (?:it|that|the booking|the whole thing)|forget (?:it|the booking|the whole thing)|do not book|don'?t book)\b/i.test(text) &&
+      !/\b(?:don'?t|do not|no need to|not)\s+cancel\b/i.test(text);
+    if (abandonInProgress) {
+      if (this.reservation) {
+        const cancelled = await cancelReservation(this.ctx.db, this.reservation.id);
+        this.reservation = null;
+        this.state = "END";
+        return this.say(
+          cancelled ? "No worries — I've cancelled that booking. Thanks so much for calling." : "That booking's already cancelled. Thanks for calling.",
+          "cancelled_same_call",
+          true,
+        );
+      }
+      this.state = "END";
+      return this.say("No worries at all — I won't book anything in. Give us a call back whenever suits and we'll sort your table. Cheers!", "booking_abandoned", true);
+    }
+
     // A different date named (no correction cue) during a later collection step
     // clashes with what we already have — clarify instead of guessing (Kevin #5).
     if (["COLLECT_TIME", "COLLECT_PARTY_SIZE", "CONFIRM_PARTY", "COLLECT_NAME", "COLLECT_PHONE"].includes(this.state)) {
@@ -1157,8 +1182,11 @@ export class ReservationMachine {
       this.state = "END";
       return this.say("No worries — I won't lock anything in. Give us a call back anytime and we'll sort your table. Cheers!", "booking_abandoned", true);
     }
-    // Clear yes — create it now.
-    if (isYes(text)) return this.finaliseBooking();
+    // Clear yes — or the caller literally saying "confirm" / "lock it in" / "go
+    // ahead" — create it now. (Kevin: make sure a "confirm" locks it in.)
+    if (isYes(text) || /\b(confirm(ed)?|lock (?:it|that) in|go ahead|that'?s (?:right|confirmed)|all good|all set)\b/i.test(text)) {
+      return this.finaliseBooking();
+    }
     // Plain "no" with no specific change — ask what they'd like to change.
     if (isNo(text)) {
       this.state = "CONFIRM_BOOKING_CHANGE";
@@ -1374,7 +1402,7 @@ export class ReservationMachine {
     const noted = this.notesPhrase(r.specialRequests);
     const addr = r.customerName ? `, ${r.customerName}` : "";
     return this.say(
-      `Lovely${addr} — that's you all booked in: a table for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll send you a quick text to confirm. Is there anything else I can help you with?`,
+      `Lovely${addr} — that's confirmed and booked in: a table for ${r.partySize} ${when}, under ${r.customerName}.${noted} I'll send you a quick text as well. Is there anything else I can help you with?`,
       "confirmed",
       false,
     );

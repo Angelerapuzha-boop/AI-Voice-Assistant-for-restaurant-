@@ -424,6 +424,54 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
   });
 });
 
+describe("end-of-call: confirm locks in, sudden cancel drops it (Kevin: feel human)", () => {
+  it("a literal 'confirm' at the confirm beat locks the booking in", async () => {
+    const phone = "+61411222901";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 901", "no thanks"]);
+    const t = await m.next("confirm");
+    expect(t.kind).toBe("confirmed");
+    expect((await booking(phone))!.partySize).toBe(2);
+  });
+
+  it("a bare 'go ahead' at the confirm beat locks it in", async () => {
+    const phone = "+61411222902";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 902", "no thanks"]);
+    const t = await m.next("go ahead");
+    expect(t.kind).toBe("confirmed");
+  });
+
+  it("a sudden 'cancel it' at the confirm beat books NOTHING", async () => {
+    const phone = "+61411222903";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 903", "no thanks"]);
+    const t = await m.next("actually, cancel it");
+    expect(t.kind).toBe("booking_abandoned");
+    expect(t.endCall).toBe(true);
+    expect(await booking(phone)).toBeUndefined();
+  });
+
+  it("a sudden 'cancel' mid-booking ends the call with no booking", async () => {
+    const m = mk();
+    await play(m, ["book a table", "tomorrow"]); // at the time step
+    const t = await m.next("actually, cancel it");
+    expect(t.kind).toBe("booking_abandoned");
+    expect(t.endCall).toBe(true);
+  });
+
+  it("a sudden 'cancel' right after confirming cancels the booking", async () => {
+    const phone = "+61411222905";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 905", "no thanks", "yes please"]);
+    expect(await booking(phone)).toBeTruthy(); // booked
+    const t = await m.next("oh wait, cancel that");
+    expect(t.kind).toBe("cancelled_same_call");
+    expect(t.endCall).toBe(true);
+    expect(m.reservation).toBeNull();
+  });
+});
+
 describe("doubtful-name confirmation + spelling (Kevin: confirm or spell a mis-heard name)", () => {
   it("a common name is trusted — no extra confirmation turn", async () => {
     const m = mk();
