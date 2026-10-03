@@ -208,6 +208,9 @@ describe("parseName", () => {
     expect(parseName("lovely, thanks")).toBeNull();
     expect(parseName("brilliant")).toBeNull();
     expect(parseName("uh-huh")).toBeNull();
+    expect(parseName("got")).toBeNull(); // live call: "Raju" mis-STT'd, "Got" booked
+    expect(parseName("the time")).toBeNull();
+    expect(parseName("the day")).toBeNull();
     // real names still parse, including after a lead-in
     expect(parseName("it's Marcus")).toBe("Marcus");
     expect(parseName("Priya")).toBe("Priya");

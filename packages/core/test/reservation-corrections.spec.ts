@@ -329,4 +329,43 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     await m.next("yes");
     expect((await booking(phone))!.partySize).toBe(6);
   });
+
+  // Kevin's live call: he said "Raju" but it was mis-heard and booked as "Got",
+  // with no way to fix it. The confirm beat must let the caller correct the name.
+  it("a NAME correction at the confirm step is applied ('no, the name's Raju')", async () => {
+    const phone = "+61411222881";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Gottt", "0411 222 881"]);
+    const t = await m.next("no, the name's Raju");
+    expect(t.kind).toBe("confirm_booking");
+    expect(t.say).toMatch(/raju/i);
+    await m.next("yes");
+    expect((await booking(phone))!.customerName.toLowerCase()).toContain("raju");
+  });
+
+  it("a NAME change via the 'what would you like to change' path is applied", async () => {
+    const phone = "+61411222882";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Gottt", "0411 222 882"]);
+    await m.next("no"); // -> what would you like to change
+    const t = await m.next("the name is Raju");
+    expect(t.kind).toBe("confirm_booking");
+    expect(t.say).toMatch(/raju/i);
+    await m.next("yes");
+    expect((await booking(phone))!.customerName.toLowerCase()).toContain("raju");
+  });
+
+  it("GUARD: 'the time' at the change step is not stored as the name", async () => {
+    const phone = "+61411222883";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 883"]);
+    await m.next("no");
+    const t = await m.next("the time"); // wants to change time but hasn't named one yet
+    expect(t.kind).toBe("confirm_change"); // re-ask, NOT booked, NOT name="time"
+    await m.next("eight pm");
+    await m.next("yes");
+    const b = await booking(phone);
+    expect(b!.customerName.toLowerCase()).toContain("dave"); // name unchanged
+    expect(b!.reservationTime.slice(0, 5)).toBe("20:00");
+  });
 });

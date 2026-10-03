@@ -319,7 +319,10 @@ const NON_NAME = new Set([
   "oh", "that", "thats", "cheers", "great", "lovely", "perfect", "wonderful",
   "brilliant", "awesome", "excellent", "fantastic", "marvellous", "marvelous",
   "ta", "cool", "righto", "right", "worries", "good", "grand", "nice", "beauty",
-  "beaut", "ripper", "yay", "huh", "uhhuh", "uh-huh", "sorry", "alright",
+  "beaut", "ripper", "yay", "huh", "uhhuh", "uh-huh", "sorry", "alright", "got",
+  // the slot words the confirm beat offers ("what would you like to change — the
+  // day, the time, or the number?") must never be stored as the NAME.
+  "day", "date", "time", "number", "people", "party", "person", "booking",
 ]);
 
 /**

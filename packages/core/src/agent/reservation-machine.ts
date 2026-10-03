@@ -996,7 +996,7 @@ export class ReservationMachine {
     const when = speakWhen(this.draft.date!, this.draft.time!, this.ctx.now(), this.ctx.timezone);
     const who = this.draft.name ? `, ${this.draft.name}` : "";
     return Promise.resolve(this.say(
-      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}. Shall I lock that in for you?`,
+      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}. Shall I lock that in, or would you like to change anything?`,
       "confirm_booking",
     ));
   }
@@ -1013,6 +1013,18 @@ export class ReservationMachine {
       const t = await this.runAvailability();
       return { ...t, say: `No worries, I'll ${corrAcks.join(" and ")}. ${t.say}` };
     }
+    // A NAME correction stated at the confirm step ("no, the name's Raju", "it's
+    // under Raju", "my name is Raju") — the real-time STT often mis-hears a name,
+    // so let the caller fix it here instead of booking the wrong one (Kevin's live
+    // call: "Raju" booked as "Got").
+    if (/\b(name|under|call me|spel|spelt|spelled|first name)\b/i.test(text)) {
+      const nm = parseName(text);
+      if (nm && nm.toLowerCase() !== (this.draft.name ?? "").toLowerCase()) {
+        this.draft.name = nm; this.confirmReasks = 0;
+        const t = await this.askToConfirmBooking();
+        return { ...t, say: `No worries, under ${nm}. ${t.say}` };
+      }
+    }
     // Cancel outright — never create a booking.
     if (detectIntent(text) === "cancel" || /\b(cancel|don'?t book|do not book|scrap it|forget it|never mind|changed my mind|not anymore)\b/i.test(text)) {
       this.state = "END";
@@ -1023,7 +1035,7 @@ export class ReservationMachine {
     // Plain "no" with no specific change — ask what they'd like to change.
     if (isNo(text)) {
       this.state = "CONFIRM_BOOKING_CHANGE";
-      return this.say("No worries — what would you like to change? The day, the time, or the number of people?", "confirm_change");
+      return this.say("No worries — what would you like to change? The day, the time, the number, or the name?", "confirm_change");
     }
     // Unclear — ask once more, then go ahead rather than strand a complete booking.
     this.confirmReasks++;
@@ -1051,10 +1063,16 @@ export class ReservationMachine {
       const p = interpretPartySize(text, { expectingParty: true });
       if (p.kind === "value" && p.value !== this.draft.partySize) { this.draft.partySize = p.value; changed = true; }
     }
+    // A name change ("the name's Raju" / "put it under Raju" / just "Raju") — they
+    // were asked what to change, so a bare name is a name change here.
+    if (!changed) {
+      const nm = parseName(text);
+      if (nm && nm.toLowerCase() !== (this.draft.name ?? "").toLowerCase()) { this.draft.name = nm; changed = true; }
+    }
     if (!changed) {
       this.confirmReasks++;
       if (this.confirmReasks >= 3) return this.askToConfirmBooking();
-      return Promise.resolve(this.say("Sure — what would you like to change: the day, the time, or the number of people?", "confirm_change"));
+      return Promise.resolve(this.say("Sure — what would you like to change: the day, the time, the number, or the name?", "confirm_change"));
     }
     this.confirmReasks = 0;
     return this.runAvailability(); // re-validate the new slot, then re-confirm
