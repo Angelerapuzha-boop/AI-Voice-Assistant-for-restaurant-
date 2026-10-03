@@ -92,6 +92,7 @@ export type ReservationState =
   | "COLLECT_EXTRAS"
   | "CONFIRM_NAME"
   | "SPELL_NAME"
+  | "CONFIRM_PHONE"
   | "CONFIRMED"
   | "POST_CONFIRM"
   | "FIND_BOOKING"
@@ -227,6 +228,8 @@ export class ReservationMachine {
   private pick(arr: string[]): string { return arr[Math.floor(Math.random() * arr.length)]!; }
   /** Asked the proactive occasion / seating / dietary question once per booking. */
   private askedExtras = false;
+  /** Offered to use the caller-ID number once, so we don't re-ask it. */
+  private phoneConfirmed = false;
 
   constructor(private ctx: ReservationContext) {}
 
@@ -369,6 +372,7 @@ export class ReservationMachine {
       case "CONFIRM_NAME": return this.handleConfirmName(text);
       case "SPELL_NAME": return this.handleSpellName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
+      case "CONFIRM_PHONE": return this.handleConfirmPhone(text);
       case "COLLECT_EXTRAS": return this.handleExtras(text);
       case "CONFIRM_DETAILS": return this.handleConfirmBooking(text);
       case "CONFIRM_BOOKING_CHANGE": return this.handleConfirmBookingChange(text);
@@ -1099,7 +1103,25 @@ export class ReservationMachine {
         : `${this.ack()} — that time's free. May I grab a name for the booking?`;
       return Promise.resolve(this.say(restate, "ask_name"));
     }
-    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say(this.pick(["Wonderful. And the best number to reach you on?", "Lovely. And the best number to reach you on?", "Great — and what's the best number to reach you on?"]), "ask_phone")); }
+    if (!this.draft.phone) {
+      // Caller ID known: confirm using the number they're calling from, rather
+      // than silently taking it or making them recite it (Kevin: "if it's the same
+      // number I'm calling from, accept it from there" — reference-style).
+      if (this.ctx.callerPhone && !this.phoneConfirmed) {
+        this.phoneConfirmed = true;
+        this.state = "CONFIRM_PHONE";
+        return Promise.resolve(this.say(this.pick([
+          "And is the number you're calling from the best one for the booking?",
+          "Shall I use the number you're calling from, or is there a better one?",
+          "And is the mobile you're calling from the best way to reach you?",
+        ]), "confirm_phone"));
+      }
+      // No caller ID — ask for a number.
+      if (!this.ctx.callerPhone) {
+        this.state = "COLLECT_PHONE";
+        return Promise.resolve(this.say(this.pick(["Wonderful. And the best number to reach you on?", "Lovely. And the best number to reach you on?", "Great — and what's the best number to reach you on?"]), "ask_phone"));
+      }
+    }
     // A dedicated, warm "special touches" turn (occasion first) — the caring beat
     // that makes it feel like a real conversation, not a form (Kevin 2026-10-03).
     // Asked once, and skipped if the caller already volunteered a request.
@@ -1125,6 +1147,22 @@ export class ReservationMachine {
       return Promise.resolve(this.say("No worries — I won't lock anything in. Give us a call back anytime. Cheers!", "booking_abandoned", true));
     }
     return this.collectContact();
+  }
+
+  /** CONFIRM_PHONE: the caller confirms the number they're calling from, or gives a
+   * different one. Any clear number wins; "yes" uses the caller ID; "no" asks for
+   * a number; unclear re-asks once then falls back to the caller ID. */
+  private handleConfirmPhone(text: string): Promise<ReservationTurn> {
+    const phone = parsePhone(text);
+    if (phone) { this.draft.phone = phone; this.phoneReasks = 0; return this.collectContact(); }
+    if (isYes(text)) { this.draft.phone = this.ctx.callerPhone!; this.phoneReasks = 0; return this.collectContact(); }
+    if (isNo(text)) {
+      this.state = "COLLECT_PHONE";
+      return Promise.resolve(this.say("No worries — what's the best number to reach you on, then?", "ask_phone"));
+    }
+    this.phoneReasks++;
+    if (this.phoneReasks >= 2) { this.draft.phone = this.ctx.callerPhone!; this.phoneReasks = 0; return this.collectContact(); }
+    return Promise.resolve(this.say("Sorry — shall I use the number you're calling from? Say yes, or give me the number.", "confirm_phone"));
   }
 
   /** Read the full booking back and ask the caller to confirm (or change / cancel)
