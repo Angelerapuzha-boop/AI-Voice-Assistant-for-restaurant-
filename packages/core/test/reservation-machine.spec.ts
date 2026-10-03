@@ -15,15 +15,19 @@ beforeAll(async () => { ctx = await setupTestDb(); db = ctx.db; });
 afterAll(async () => { await db.end(); });
 beforeEach(async () => { await resetTransactionalData(db); });
 
-async function machine(callerPhone: string | null = "+61400555001"): Promise<ReservationMachine> {
+async function machine(callerPhone: string | null = "+61400555001", nowOverride?: Date): Promise<ReservationMachine> {
   const rc: ReservationContext = {
     db, restaurantId: ctx.restaurant.id, restaurantName: "Meat Box", hours: ctx.hours,
     settings: await getReservationSettings(db, ctx.restaurant.id), timezone: TZ,
-    now: () => NOW, callerPhone: callerPhone ?? undefined,
+    now: () => nowOverride ?? NOW, callerPhone: callerPhone ?? undefined,
     address: ctx.restaurant.address, phoneDisplay: ctx.restaurant.phoneDisplay,
   };
   return new ReservationMachine(rc);
 }
+// A fixed mid-morning clock for tests that say "today … <evening time>" — so the
+// time is always in the future regardless of the wall-clock the suite runs at
+// (otherwise "today 8 PM" is treated as past when run after ~8 PM). Monday 10:00 Perth.
+const MORNING = new Date("2026-10-05T02:00:00Z");
 
 describe("ReservationMachine — booking flow", () => {
   it("books a table through a short natural conversation", async () => {
@@ -234,7 +238,8 @@ describe("ReservationMachine — booking flow", () => {
 
   it("REPLAY of the reported failed call — 'About four' / 'Four' must NOT loop (spec §26)", async () => {
     // Reproduces Kevin's transcript: today / about 8 PM / 'about four' / 'four'.
-    const m = await machine();
+    // Pinned to a morning clock so "today 8 PM" is always future (was flaky after 8 PM).
+    const m = await machine("+61400555001", MORNING);
     await m.next("I want to book a table");
     const said: string[] = [];
     let t = await m.next("today");
