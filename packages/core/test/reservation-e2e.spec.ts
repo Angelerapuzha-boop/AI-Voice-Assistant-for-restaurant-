@@ -115,7 +115,7 @@ describe("reservation sweep — 100+ conversations, zero loops / false confirmat
       const phone = `+61490${String(100000 + i).slice(-6)}`;
       const date = isoDate(3 + (i % 110));
       const time = TIMES[i % TIMES.length]!;
-      const utterances = ["book a table", date, time, ...c.party, "Kevin", "yes please"];
+      const utterances = ["book a table", date, time, ...c.party, "Kevin", "no thanks", "yes please"];
       const m = mk(phone);
       const turns = await run(m, utterances);
       const last = turns[turns.length - 1]!;

@@ -62,7 +62,7 @@ beforeEach(async () => { await resetTransactionalData(db); });
 describe("late corrections to already-captured slots (Cekura regression)", () => {
   it("party correction at the NAME step wins (E1: 'actually make it six')", async () => {
     const phone = "+61411222801";
-    await play(mk(), ["I'd like to book a table", "tomorrow", "seven", "four", "actually make it six", "Tara", "0411 222 801", "yes please"]);
+    await play(mk(), ["I'd like to book a table", "tomorrow", "seven", "four", "actually make it six", "Tara", "0411 222 801", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(b!.partySize).toBe(6);
@@ -71,13 +71,13 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
 
   it("party correction stated with 'not' at the name step (E1b: 'six people not four')", async () => {
     const phone = "+61411222802";
-    await play(mk(), ["book a table", "tomorrow", "seven", "four", "sorry, six people not four", "Nina", "0411 222 802", "yes please"]);
+    await play(mk(), ["book a table", "tomorrow", "seven", "four", "sorry, six people not four", "Nina", "0411 222 802", "no thanks", "yes please"]);
     expect((await booking(phone))!.partySize).toBe(6);
   });
 
   it("date correction at the TIME step wins (E2: 'no sorry, make it Thursday')", async () => {
     const phone = "+61411222803";
-    await play(mk(), ["book a table", "Wednesday", "no sorry, make it Thursday", "seven", "two", "Umar", "0411 222 803", "yes please"]);
+    await play(mk(), ["book a table", "Wednesday", "no sorry, make it Thursday", "seven", "two", "Umar", "0411 222 803", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(dow(b!.reservationDate)).toBe(4); // Thursday
@@ -87,7 +87,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
   it("post-confirm party change is applied ('the party is for six, not four')", async () => {
     const phone = "+61411222804";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Tara", "0411 222 804", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Tara", "0411 222 804", "no thanks", "yes please"]);
     expect((await booking(phone))!.partySize).toBe(4);
     await m.next("actually the party is for six, not four");
     expect((await booking(phone))!.partySize).toBe(6);
@@ -96,7 +96,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
   it("post-confirm time change is applied ('can we do 8pm instead')", async () => {
     const phone = "+61411222805";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Willa", "0411 222 805", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Willa", "0411 222 805", "no thanks", "yes please"]);
     expect((await booking(phone))!.reservationTime.slice(0, 5)).toBe("19:00");
     await m.next("actually, can we do 8 pm instead");
     expect((await booking(phone))!.reservationTime.slice(0, 5)).toBe("20:00");
@@ -104,7 +104,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
 
   it("GUARD: a plain name is not misread as a date change", async () => {
     const phone = "+61411222806";
-    await play(mk(), ["book a table", "tomorrow", "seven", "four", "June", "0411 222 806", "yes please"]);
+    await play(mk(), ["book a table", "tomorrow", "seven", "four", "June", "0411 222 806", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b!.customerName.toLowerCase()).toContain("june");
     expect(b!.reservationDate).toBe(isoDate(1)); // still tomorrow, not moved
@@ -113,7 +113,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
   it("GUARD: 'no, that's all thanks' at post-confirm does NOT modify the booking", async () => {
     const phone = "+61411222807";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 807", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 807", "no thanks", "yes please"]);
     const before = await booking(phone);
     const turn = await m.next("no, that's all thanks");
     const after = await booking(phone);
@@ -124,7 +124,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
 
   it("party AND name in ONE breath at the name step both land (E1 compound)", async () => {
     const phone = "+61411222811";
-    await play(mk(), ["book a table", "tomorrow", "seven", "four", "actually make it six, the name's Tara", "0411 222 811", "yes please"]);
+    await play(mk(), ["book a table", "tomorrow", "seven", "four", "actually make it six, the name's Tara", "0411 222 811", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(b!.partySize).toBe(6);
@@ -145,7 +145,7 @@ describe("late corrections to already-captured slots (Cekura regression)", () =>
   it("GUARD: post-confirm 'make it 8pm instead' changes time only, not the date (P1)", async () => {
     const phone = "+61411222812";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Willa", "0411 222 812", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Willa", "0411 222 812", "no thanks", "yes please"]);
     const before = await booking(phone);
     await m.next("actually, can we make it 8 pm instead of 7");
     const after = await booking(phone);
@@ -158,7 +158,7 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
   it("K1: 'no, that's all for today' at post-confirm ENDS the call and does NOT move the booking to today", async () => {
     const phone = "+61411222851";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Priya", "0411 222 851", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Priya", "0411 222 851", "no thanks", "yes please"]);
     const before = await booking(phone);
     expect(before!.reservationDate).toBe(isoDate(1)); // tomorrow
     const turn = await m.next("No, that's all for today. Thank you. Goodbye!");
@@ -171,7 +171,7 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
   it("K1b: a GENUINE post-confirm date change WITH a change cue still applies", async () => {
     const phone = "+61411222852";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Dev", "0411 222 852", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dev", "0411 222 852", "no thanks", "yes please"]);
     const before = await booking(phone);
     await m.next("actually, can we move it to Saturday");
     const after = await booking(phone);
@@ -184,7 +184,7 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two"]); // now at the name step
     await m.next("tomorrow"); // must be rejected as a name, not stored
-    await play(m, ["Yusuf", "0411 222 853", "yes please"]);
+    await play(m, ["Yusuf", "0411 222 853", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(b!.customerName.toLowerCase()).toContain("yusuf");
@@ -197,7 +197,7 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
     await play(m, ["book a table", "tomorrow", "seven pm"]); // time captured; now at the party step
     const t = await m.next("seven pm"); // a duplicated time — must NOT become party 7
     expect(t.say.toLowerCase()).toMatch(/how many|joining you|number|keypad/);
-    await play(m, ["five", "Nadia", "0411 222 861", "yes please"]);
+    await play(m, ["five", "Nadia", "0411 222 861", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(b!.partySize).toBe(5); // five, never seven
@@ -207,7 +207,7 @@ describe("accent sweep regressions (2026-10-02 Indian/British/American)", () => 
   it("B1: post-confirm 'actually, it's for half past seven' is a TIME correction, not a party of 7", async () => {
     const phone = "+61411222862";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "half past seven", "five", "Delia", "0411 222 862", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "half past seven", "five", "Delia", "0411 222 862", "no thanks", "yes please"]);
     const before = await booking(phone);
     expect(before!.partySize).toBe(5);
     expect(before!.reservationTime.slice(0, 5)).toBe("19:30");
@@ -222,7 +222,7 @@ describe("call-quality fixes from listening to recordings (Kevin's 6 items)", ()
   it("#1 repeat request after confirmation reads the booking back and stays on the line", async () => {
     const phone = "+61411222821";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Marco", "0411 222 821", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Marco", "0411 222 821", "no thanks", "yes please"]);
     const t = await m.next("sorry, can you say that again?");
     expect(t.kind).toBe("repeat");
     expect(t.say).toMatch(/\bfor 4\b|\bfour\b/);
@@ -242,7 +242,7 @@ describe("call-quality fixes from listening to recordings (Kevin's 6 items)", ()
   it("#2/#6 does NOT hang up on a vague reply — gives the caller their last word", async () => {
     const phone = "+61411222822";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 822", "yes please"]);
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 822", "no thanks", "yes please"]);
     const vague = await m.next("um");
     expect(vague.endCall).toBeFalsy();
     expect(vague.kind).toBe("anything_else");
@@ -274,7 +274,7 @@ describe("call-quality fixes from listening to recordings (Kevin's 6 items)", ()
     expect(t.say.toLowerCase()).toContain("friday");
     const t2 = await m.next("Friday please");
     expect(t2.kind).toBe("ask_time"); // resumes collection
-    await play(m, ["7 pm", "two", "Gina", "0411 222 825", "yes please"]);
+    await play(m, ["7 pm", "two", "Gina", "0411 222 825", "no thanks", "yes please"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(dow(b!.reservationDate)).toBe(5); // Friday
@@ -286,7 +286,9 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222871";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar"]);
-    const t = await m.next("0411 222 871");
+    const te = await m.next("0411 222 871");
+    expect(te.kind).toBe("ask_extras"); // dedicated special-touches turn first
+    const t = await m.next("no thanks");
     expect(t.kind).toBe("confirm_booking"); // reads it back, asks to lock in
     expect(t.say.toLowerCase()).toMatch(/lock that in/);
     expect(t.endCall).toBeFalsy();
@@ -310,6 +312,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222873";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 873"]);
+    await m.next("no thanks"); // the special-touches turn
     const t = await m.next("no");
     expect(t.kind).toBe("confirm_change");
     const t2 = await m.next("make it four");
@@ -323,6 +326,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222874";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "four", "Omar", "0411 222 874"]);
+    await m.next("no thanks"); // the special-touches turn
     const t = await m.next("no, make it six");
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/six/i);
@@ -336,6 +340,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222881";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Gottt", "0411 222 881"]);
+    await m.next("no thanks"); // the special-touches turn
     const t = await m.next("no, the name's Raju");
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/raju/i);
@@ -347,6 +352,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222882";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Gottt", "0411 222 882"]);
+    await m.next("no thanks"); // the special-touches turn
     await m.next("no"); // -> what would you like to change
     const t = await m.next("the name is Raju");
     expect(t.kind).toBe("confirm_booking");
@@ -355,15 +361,15 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     expect((await booking(phone))!.customerName.toLowerCase()).toContain("raju");
   });
 
-  it("the confirm beat invites special touches (occasion / seating / dietary)", async () => {
+  it("asks the special-touches question (occasion / seating / dietary) as its own turn", async () => {
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar"]);
     const t = await m.next("0411 222 891");
-    expect(t.kind).toBe("confirm_booking");
+    expect(t.kind).toBe("ask_extras");
     expect(t.say.toLowerCase()).toMatch(/special|seating|dietary|occasion/);
   });
 
-  it("a special request volunteered at the confirm beat is noted and read back", async () => {
+  it("a special request given at the special-touches turn is noted and read back at confirm", async () => {
     const phone = "+61411222892";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 892"]);
@@ -375,11 +381,24 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     expect((b!.specialRequests || "").toLowerCase()).toContain("window");
   });
 
+  it("an occasion mentioned at the special-touches turn is noted and read back", async () => {
+    const phone = "+61411222893";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 893"]);
+    const t = await m.next("it's our anniversary");
+    expect(t.kind).toBe("confirm_booking");
+    expect(t.say.toLowerCase()).toContain("occasion"); // "I've noted special occasion"
+    await m.next("yes");
+    const b = await booking(phone);
+    expect((b!.specialRequests || "").toLowerCase()).toContain("occasion");
+  });
+
   it("GUARD: 'the time' at the change step is not stored as the name", async () => {
     const phone = "+61411222883";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 883"]);
-    await m.next("no");
+    await m.next("no thanks"); // the special-touches turn
+    await m.next("no"); // -> what would you like to change
     const t = await m.next("the time"); // wants to change time but hasn't named one yet
     expect(t.kind).toBe("confirm_change"); // re-ask, NOT booked, NOT name="time"
     await m.next("eight pm");

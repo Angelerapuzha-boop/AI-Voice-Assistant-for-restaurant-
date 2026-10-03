@@ -42,6 +42,9 @@ describe("ReservationMachine — booking flow", () => {
     t = await m.next("four");
     expect(t.kind).toBe("ask_name");
     t = await m.next("Kevin");
+    // dedicated special-touches turn (occasion / seating / dietary)
+    expect(t.kind).toBe("ask_extras");
+    t = await m.next("no thanks");
     // caller ID present -> reads the booking back and asks to confirm before booking
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/lock that in/i);
@@ -79,6 +82,8 @@ describe("ReservationMachine — booking flow", () => {
     let t = await m.next("Kevin");
     expect(t.kind).toBe("ask_phone");
     t = await m.next("0412 345 678");
+    expect(t.kind).toBe("ask_extras");
+    t = await m.next("no thanks");
     expect(t.kind).toBe("confirm_booking");
     t = await m.next("yes please");
     expect(t.kind).toBe("confirmed");
@@ -107,6 +112,8 @@ describe("ReservationMachine — booking flow", () => {
     await m.next("seven");
     await m.next("four");
     let t = await m.next("Kevin");
+    expect(t.kind).toBe("ask_extras");
+    t = await m.next("no thanks");
     expect(t.kind).toBe("confirm_booking");
     t = await m.next("yes please");
     expect(t.kind).toBe("confirmed");
@@ -198,6 +205,8 @@ describe("ReservationMachine — booking flow", () => {
     const m = await machine();
     await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
     let t = await m.next("Kevin");
+    expect(t.kind).toBe("ask_extras");
+    t = await m.next("no thanks");
     expect(t.kind).toBe("confirm_booking");
     t = await m.next("yes please");
     expect(t.kind).toBe("confirmed");
@@ -214,6 +223,7 @@ describe("ReservationMachine — booking flow", () => {
     const m = await machine();
     await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
     await m.next("Kevin");
+    await m.next("no thanks");
     await m.next("yes please");
     let t = await m.next("can you change it");
     expect(t.kind).toBe("modify_what");
@@ -227,6 +237,7 @@ describe("ReservationMachine — booking flow", () => {
     const m = await machine();
     await m.next("book a table"); await m.next(DATE); await m.next("seven"); await m.next("four");
     await m.next("Kevin");
+    await m.next("no thanks");
     await m.next("yes please");
     const t = await m.next("no that's all");
     expect(t.kind).toBe("goodbye");
@@ -280,6 +291,7 @@ describe("ReservationMachine — booking flow", () => {
     expect(t.kind).toBe("ask_name");
     // and it booked five, not four
     await m.next("Kevin");
+    await m.next("no thanks");
     await m.next("yes please");
     expect(m.reservation?.partySize).toBe(5);
   });
@@ -295,6 +307,7 @@ describe("ReservationMachine — booking flow", () => {
     t = await m.next("five");
     expect(t.kind).toBe("ask_name");
     await m.next("Kevin");
+    await m.next("no thanks");
     await m.next("yes please");
     expect(m.reservation?.partySize).toBe(5);
   });
@@ -482,6 +495,7 @@ describe("ReservationMachine — seating & dietary notes (spec §21-22)", () => 
     await m.next("seven");
     await m.next("four");
     await m.next("Kevin");
+    await m.next("no thanks");
     await m.next("yes please"); // -> confirmed (POST_CONFIRM)
     const t = await m.next("oh, I'm allergic to prawns");
     expect(t.kind).toBe("note_added");

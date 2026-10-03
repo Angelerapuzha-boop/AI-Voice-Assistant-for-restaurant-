@@ -60,6 +60,7 @@ export type ReservationState =
   | "COLLECT_PHONE"
   | "CONFIRM_DETAILS"
   | "CONFIRM_BOOKING_CHANGE"
+  | "COLLECT_EXTRAS"
   | "CONFIRMED"
   | "POST_CONFIRM"
   | "FIND_BOOKING"
@@ -191,6 +192,8 @@ export class ReservationMachine {
   /** Pick a phrasing variant at random so two calls don't sound identical (Kevin:
    * "make it special and different from the other normal call"). */
   private pick(arr: string[]): string { return arr[Math.floor(Math.random() * arr.length)]!; }
+  /** Asked the proactive occasion / seating / dietary question once per booking. */
+  private askedExtras = false;
 
   constructor(private ctx: ReservationContext) {}
 
@@ -306,6 +309,7 @@ export class ReservationMachine {
       case "OFFER_ALTERNATIVES": return this.handleAlternatives(text);
       case "COLLECT_NAME": return this.handleName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
+      case "COLLECT_EXTRAS": return this.handleExtras(text);
       case "CONFIRM_DETAILS": return this.handleConfirmBooking(text);
       case "CONFIRM_BOOKING_CHANGE": return this.handleConfirmBookingChange(text);
       case "POST_CONFIRM": return this.handlePostConfirm(text);
@@ -1035,7 +1039,31 @@ export class ReservationMachine {
       return Promise.resolve(this.say(restate, "ask_name"));
     }
     if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say(this.pick(["Wonderful. And the best number to reach you on?", "Lovely. And the best number to reach you on?", "Great — and what's the best number to reach you on?"]), "ask_phone")); }
+    // A dedicated, warm "special touches" turn (occasion first) — the caring beat
+    // that makes it feel like a real conversation, not a form (Kevin 2026-10-03).
+    // Asked once, and skipped if the caller already volunteered a request.
+    if (!this.askedExtras && !(this.draft.specialRequests ?? "").trim()) {
+      this.askedExtras = true;
+      this.state = "COLLECT_EXTRAS";
+      return Promise.resolve(this.say(this.pick([
+        "Lovely. And before I lock it in — is it a special occasion at all, like a birthday or anniversary? And any seating or dietary needs I should note?",
+        "Wonderful. Is this for a special occasion — a birthday, anniversary, or a celebration? And any seating preference or dietary needs?",
+        "Great. And is there a special occasion we're marking — or any seating or dietary requests I can note for you?",
+      ]), "ask_extras"));
+    }
     return this.askToConfirmBooking();
+  }
+
+  /** The special-touches answer. Any occasion / seating / dietary note was already
+   * captured by captureExtras in next(); here we move on to confirming (a plain
+   * "no"/"nothing" just proceeds — we never loop on this nicety). */
+  private handleExtras(text: string): Promise<ReservationTurn> {
+    // Let the caller bail here too ("no, don't book it") — never book on a cancel.
+    if (detectIntent(text) === "cancel" || /\b(cancel|don'?t book|do not book|forget it|never mind|changed my mind)\b/i.test(text)) {
+      this.state = "END";
+      return Promise.resolve(this.say("No worries — I won't lock anything in. Give us a call back anytime. Cheers!", "booking_abandoned", true));
+    }
+    return this.collectContact();
   }
 
   /** Read the full booking back and ask the caller to confirm (or change / cancel)
@@ -1050,9 +1078,9 @@ export class ReservationMachine {
     const table = `a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}`;
     const notes = this.notesPhrase(this.draft.specialRequests);
     return Promise.resolve(this.say(this.pick([
-      `Perfect${who} — so that's ${table}.${notes} Shall I lock that in, or is there anything special I should note — a seating preference, dietary needs, or an occasion?`,
-      `Wonderful${who} — ${table}.${notes} Before I lock that in, is there anything to make it special — a window seat, any dietary needs, or are you celebrating something?`,
-      `Lovely${who} — ${table}.${notes} Shall I go ahead and lock that in, or is there anything else I can note for you — seating, dietary, or a special occasion?`,
+      `Perfect${who} — so that's ${table}.${notes} Shall I lock that in, or would you like to change anything?`,
+      `Wonderful${who} — ${table}.${notes} Shall I lock that in for you, or is there anything you'd like to change?`,
+      `Lovely${who} — ${table}.${notes} Happy for me to lock that in? Or change anything, just say.`,
     ]), "confirm_booking"));
   }
 
