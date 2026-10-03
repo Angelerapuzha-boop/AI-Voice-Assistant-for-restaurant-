@@ -188,6 +188,9 @@ export class ReservationMachine {
   private readonly acks = ["Lovely", "Of course", "Wonderful", "No worries", "Certainly", "That's lovely"];
   private ackIdx = 0;
   private ack(): string { return this.acks[this.ackIdx++ % this.acks.length]!; }
+  /** Pick a phrasing variant at random so two calls don't sound identical (Kevin:
+   * "make it special and different from the other normal call"). */
+  private pick(arr: string[]): string { return arr[Math.floor(Math.random() * arr.length)]!; }
 
   constructor(private ctx: ReservationContext) {}
 
@@ -195,7 +198,11 @@ export class ReservationMachine {
    * short, warm, reservations-framed. Recording notice folded in when required. */
   opening(opts: { recordingNotice?: boolean } = {}): string {
     const notice = opts.recordingNotice ? " This call may be recorded." : "";
-    const line = `Hello, and thanks so much for calling ${this.ctx.restaurantName}.${notice} I'd be happy to help — are you looking to book a table?`;
+    const line = this.pick([
+      `Hello, and thanks so much for calling ${this.ctx.restaurantName}.${notice} I'd be happy to help — are you looking to book a table?`,
+      `Hi there — thanks for calling ${this.ctx.restaurantName}.${notice} Lovely to hear from you. Are you calling to book a table?`,
+      `Good day, and thanks for calling ${this.ctx.restaurantName}.${notice} I'd be glad to help — would you like to book a table?`,
+    ]);
     this.lastPrompt = "Are you looking to book a table?";
     return line;
   }
@@ -689,18 +696,49 @@ export class ReservationMachine {
       const r = this.reservation;
       const when = speakWhen(r.reservationDate, r.reservationTime.slice(0, 5), this.ctx.now(), this.ctx.timezone);
       const name = r.customerName ? `, ${r.customerName}` : "";
-      return `It's my pleasure${name} — you're all set, and we'll see you ${when}. Have a wonderful day, and thanks so much for calling!`;
+      return this.pick([
+        `It's my pleasure${name} — you're all set, and we'll see you ${when}. Have a wonderful day, and thanks so much for calling!`,
+        `Brilliant${name} — you're all booked, and we'll see you ${when}. Have a lovely day, and thanks for calling!`,
+        `Wonderful${name} — that's all sorted, and we look forward to seeing you ${when}. Take care, and thanks so much for calling!`,
+      ]);
     }
-    return "It's my pleasure — have a wonderful day, and thanks so much for calling!";
+    return this.pick([
+      "It's my pleasure — have a wonderful day, and thanks so much for calling!",
+      "No worries at all — have a lovely day, and thanks for calling!",
+      "Happy to help — take care, and thanks so much for calling!",
+    ]);
   }
 
   /** Ask for the next missing booking slot, or run availability once all present. */
   private async advanceBooking(): Promise<ReservationTurn> {
-    if (!this.draft.date) { this.state = "COLLECT_DATE"; return this.say("Of course, I'd be glad to help. What day were you thinking of coming in?", "ask_date"); }
+    if (!this.draft.date) {
+      this.state = "COLLECT_DATE";
+      return this.say(this.pick([
+        "Of course, I'd be glad to help. What day were you thinking of coming in?",
+        "Lovely — what day did you have in mind?",
+        "Happy to help. Which day suits you?",
+      ]), "ask_date");
+    }
     // Echo the day back as we move to the time (reference-style confirmation).
-    if (!this.draft.time) { this.state = "COLLECT_TIME"; return this.say(`${speakDate(this.draft.date)}, lovely. And what time were you thinking of coming in?`, "ask_time"); }
+    if (!this.draft.time) {
+      this.state = "COLLECT_TIME";
+      const d = speakDate(this.draft.date);
+      return this.say(this.pick([
+        `${d}, lovely. And what time were you thinking of coming in?`,
+        `${d} — wonderful. What time works for you?`,
+        `${d}, great. And what time would you like?`,
+      ]), "ask_time");
+    }
     // Echo the time back as we move to the party size.
-    if (this.draft.partySize === undefined) { this.state = "COLLECT_PARTY_SIZE"; return this.say(`${speakTime(this.draft.time)}, wonderful. And how many will be joining you?`, "ask_party"); }
+    if (this.draft.partySize === undefined) {
+      this.state = "COLLECT_PARTY_SIZE";
+      const t = speakTime(this.draft.time);
+      return this.say(this.pick([
+        `${t}, wonderful. And how many will be joining you?`,
+        `${t} — lovely. How many will there be?`,
+        `${t}, perfect. And how many shall I set the table for?`,
+      ]), "ask_party");
+    }
     return this.runAvailability();
   }
 
@@ -984,12 +1022,19 @@ export class ReservationMachine {
       this.state = "COLLECT_NAME";
       // Restate the whole booking before taking the name (reference-style), so a
       // mis-heard detail is caught here and the caller feels looked-after.
-      const restate = this.draft.date && this.draft.time && this.draft.partySize !== undefined
-        ? `Lovely — so that's a table for ${numberWord(this.draft.partySize)} ${speakWhen(this.draft.date, this.draft.time, this.ctx.now(), this.ctx.timezone)}. That time's free — may I grab a name for the booking?`
+      const when = this.draft.date && this.draft.time && this.draft.partySize !== undefined
+        ? speakWhen(this.draft.date, this.draft.time, this.ctx.now(), this.ctx.timezone)
+        : null;
+      const restate = when
+        ? this.pick([
+            `Lovely — so that's a table for ${numberWord(this.draft.partySize!)} ${when}. That time's free — may I grab a name for the booking?`,
+            `Wonderful — a table for ${numberWord(this.draft.partySize!)} ${when}, and that time's free. Can I grab a name for the booking?`,
+            `Perfect — ${numberWord(this.draft.partySize!)} ${when}, that's available. And whose name shall I put it under?`,
+          ])
         : `${this.ack()} — that time's free. May I grab a name for the booking?`;
       return Promise.resolve(this.say(restate, "ask_name"));
     }
-    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say("Wonderful. And the best number to reach you on?", "ask_phone")); }
+    if (!this.draft.phone && !this.ctx.callerPhone) { this.state = "COLLECT_PHONE"; return Promise.resolve(this.say(this.pick(["Wonderful. And the best number to reach you on?", "Lovely. And the best number to reach you on?", "Great — and what's the best number to reach you on?"]), "ask_phone")); }
     return this.askToConfirmBooking();
   }
 
@@ -1002,10 +1047,13 @@ export class ReservationMachine {
     this.state = "CONFIRM_DETAILS";
     const when = speakWhen(this.draft.date!, this.draft.time!, this.ctx.now(), this.ctx.timezone);
     const who = this.draft.name ? `, ${this.draft.name}` : "";
-    return Promise.resolve(this.say(
-      `Perfect${who} — so that's a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}.${this.notesPhrase(this.draft.specialRequests)} Shall I lock that in, or is there anything else — a seating or dietary note?`,
-      "confirm_booking",
-    ));
+    const table = `a table for ${numberWord(this.draft.partySize!)} ${when}, under ${this.draft.name}`;
+    const notes = this.notesPhrase(this.draft.specialRequests);
+    return Promise.resolve(this.say(this.pick([
+      `Perfect${who} — so that's ${table}.${notes} Shall I lock that in, or is there anything special I should note — a seating preference, dietary needs, or an occasion?`,
+      `Wonderful${who} — ${table}.${notes} Before I lock that in, is there anything to make it special — a window seat, any dietary needs, or are you celebrating something?`,
+      `Lovely${who} — ${table}.${notes} Shall I go ahead and lock that in, or is there anything else I can note for you — seating, dietary, or a special occasion?`,
+    ]), "confirm_booking"));
   }
 
   /** Read captured notes back warmly (reference-style "I've noted…"), or "" when

@@ -355,6 +355,26 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     expect((await booking(phone))!.customerName.toLowerCase()).toContain("raju");
   });
 
+  it("the confirm beat invites special touches (occasion / seating / dietary)", async () => {
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar"]);
+    const t = await m.next("0411 222 891");
+    expect(t.kind).toBe("confirm_booking");
+    expect(t.say.toLowerCase()).toMatch(/special|seating|dietary|occasion/);
+  });
+
+  it("a special request volunteered at the confirm beat is noted and read back", async () => {
+    const phone = "+61411222892";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 892"]);
+    const t = await m.next("actually, can we sit by the window?");
+    expect(t.kind).toBe("confirm_booking");
+    expect(t.say.toLowerCase()).toContain("window");
+    await m.next("yes");
+    const b = await booking(phone);
+    expect((b!.specialRequests || "").toLowerCase()).toContain("window");
+  });
+
   it("GUARD: 'the time' at the change step is not stored as the name", async () => {
     const phone = "+61411222883";
     const m = mk();
