@@ -863,7 +863,7 @@ export class ReservationMachine {
     this.timeReasks++;
     if (this.timeReasks >= 3) return this.beginEscalation();
     return Promise.resolve(this.say(
-      this.timeReasks === 1 ? "What time were you after?" : "What time — say, six, seven or eight?",
+      this.timeReasks === 1 ? "What time were you after?" : "What time were you thinking — say, six, seven, or eight?",
       "ask_time",
     ));
   }
@@ -983,7 +983,7 @@ export class ReservationMachine {
       return Promise.resolve(this.say("No worries — I'll get the team to sort it. What name should I put it under?", "escalate_name"));
     }
     if (!this.draft.phone && !this.ctx.callerPhone) {
-      return Promise.resolve(this.say("And the best mobile number?", "escalate_phone"));
+      return Promise.resolve(this.say("And the best mobile number to reach you on?", "escalate_phone"));
     }
     return this.completeEscalation();
   }
@@ -993,7 +993,7 @@ export class ReservationMachine {
       const name = parseName(text);
       if (name) this.draft.name = name;
       else if (++this.nameReasks >= 2) this.draft.name = "Guest";
-      else return this.say("Sorry, what name should I put it under?", "escalate_name");
+      else return this.say("No worries — what name should I put it under?", "escalate_name");
     }
     if (this.draft.name && !this.draft.phone && !this.ctx.callerPhone) {
       const phone = parsePhone(text);
@@ -1162,7 +1162,7 @@ export class ReservationMachine {
     }
     this.phoneReasks++;
     if (this.phoneReasks >= 2) { this.draft.phone = this.ctx.callerPhone!; this.phoneReasks = 0; return this.collectContact(); }
-    return Promise.resolve(this.say("Sorry — shall I use the number you're calling from? Say yes, or give me the number.", "confirm_phone"));
+    return Promise.resolve(this.say("No worries — shall I use the number you're calling from? Just say yes, or give me the number.", "confirm_phone"));
   }
 
   /** Read the full booking back and ask the caller to confirm (or change / cancel)
@@ -1370,7 +1370,7 @@ export class ReservationMachine {
       if (this.phoneReasks >= 3) return this.beginEscalation();
       return Promise.resolve(this.say(
         this.phoneReasks === 1
-          ? "Sorry, could I get the mobile number again?"
+          ? "No worries — could I grab that mobile number once more?"
           : "You can say the mobile digit by digit, or tap it in on your keypad.",
         this.phoneReasks === 1 ? "ask_phone" : "ask_phone_dtmf",
       ));
@@ -1413,7 +1413,7 @@ export class ReservationMachine {
         }
         this.draft.time = undefined;
         this.state = "COLLECT_TIME";
-        return this.say("Sorry, that spot's just gone. What other time would suit?", "capacity_gone");
+        return this.say("Ah, that spot's just gone, I'm afraid — what other time would suit?", "capacity_gone");
       }
       // §30: one safe automatic retry (same idempotency key so it can't double-book).
       try {
@@ -1484,7 +1484,7 @@ export class ReservationMachine {
         if ("unavailable" in result) {
           const alts = result.unavailable.alternatives.slice(0, 2).map(speakTime);
           return this.say(
-            alts.length ? `That's not available, but I've got ${alts.join(" or ")}. Would either work?` : "That's not available I'm afraid. Another time?",
+            alts.length ? `That's not available, but I've got ${alts.join(" or ")}. Would either work?` : "That's not available, I'm afraid — is there another time that'd suit?",
             "modify_unavailable",
           );
         }
@@ -1508,7 +1508,7 @@ export class ReservationMachine {
       this.state = "END";
       return this.say(this.warmGoodbye(), "goodbye", true);
     }
-    return this.say("Sorry, was there anything else I can help you with?", "anything_else");
+    return this.say("Of course — was there anything else I can help you with?", "anything_else");
   }
 
   /** SMS confirmation generated from the stored reservation row (§43-44). */
@@ -1602,7 +1602,7 @@ export class ReservationMachine {
     if ("unavailable" in result) {
       const alts = result.unavailable.alternatives.slice(0, 2).map(speakTime);
       if (alts.length) return this.say(`That's not available, but I've got ${alts.join(" or ")}. Would either work?`, "modify_unavailable");
-      return this.say("That's not available I'm afraid. Another time?", "modify_unavailable");
+      return this.say("That's not available, I'm afraid — is there another time that'd suit?", "modify_unavailable");
     }
     this.state = "END";
     return this.say("I couldn't find that booking anymore. Anything else?", "modify_notfound");
