@@ -8,6 +8,7 @@ import {
   parseName,
   parsePartySize,
   parsePhone,
+  parseSpelledName,
 } from "../src/agent/reservation-parse";
 
 /** Resolve an interpretation to a single number for the common assertions:
@@ -178,6 +179,20 @@ describe("detectSpecialRequest", () => {
     expect(detectSpecialRequest("no special requests")).toBeNull();
     expect(detectSpecialRequest("tomorrow at seven")).toBeNull();
     expect(detectSpecialRequest("Raju")).toBeNull();
+  });
+});
+
+describe("parseSpelledName", () => {
+  it("builds a name from spelled letters", () => {
+    expect(parseSpelledName("R A J U")).toBe("Raju");
+    expect(parseSpelledName("R-A-J-U")).toBe("Raju");
+    expect(parseSpelledName("it's R A J U")).toBe("Raju"); // lead-in ignored
+    expect(parseSpelledName("Z, A, P, H, I, R")).toBe("Zaphir");
+  });
+  it("returns null when it isn't a spelling", () => {
+    expect(parseSpelledName("Raju")).toBeNull();
+    expect(parseSpelledName("yes that's right")).toBeNull();
+    expect(parseSpelledName("")).toBeNull();
   });
 });
 

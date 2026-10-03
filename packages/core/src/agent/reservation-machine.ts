@@ -26,7 +26,36 @@ import {
   parseName,
   parsePartySize,
   parsePhone,
+  parseSpelledName,
 } from "./reservation-parse";
+
+/** Recognised common first names — a name in this set is trusted and booked
+ * straight away; a name NOT in it (or ≤2 letters) is read back for confirmation
+ * with an offer to spell, so a mis-heard name is caught before booking. Broad on
+ * purpose (AU + common international names) so genuine names rarely need the extra
+ * beat; STT garble ("Got", "Silence") falls outside it and gets confirmed. */
+const COMMON_NAMES = new Set([
+  // AU/UK/US common
+  "kevin", "david", "dave", "john", "michael", "mike", "james", "jim", "daniel", "dan",
+  "sam", "ben", "chris", "luke", "jack", "ryan", "josh", "matt", "matthew", "tom", "thomas",
+  "nick", "nicholas", "pat", "patrick", "paul", "peter", "pete", "mark", "marco", "marcus",
+  "andrew", "andy", "adam", "aaron", "alex", "anthony", "tony", "brian", "bruce", "charlie",
+  "craig", "dean", "eric", "frank", "gary", "george", "greg", "harry", "henry", "ian",
+  "jason", "jeff", "joe", "joseph", "kyle", "liam", "lucas", "martin", "nathan", "oliver",
+  "oscar", "owen", "phil", "robert", "rob", "roger", "ross", "scott", "sean", "shane",
+  "simon", "stephen", "steve", "stuart", "travis", "will", "william", "zac", "zach",
+  "sarah", "sara", "emma", "zoe", "jess", "jessica", "emily", "sophie", "sophia", "olivia",
+  "kate", "katie", "kathy", "laura", "lucy", "mia", "ella", "chloe", "grace", "hannah",
+  "amy", "anna", "bella", "claire", "clare", "ruby", "lily", "maya", "mila", "nina",
+  "tara", "willa", "gina", "june", "may", "june", "holly", "julia", "karen", "linda",
+  "megan", "nicole", "rachel", "rebecca", "becky", "sally", "tina", "wendy", "delia",
+  // common international (incl. South-Asian, so "Raju"/"Priya" are trusted)
+  "raju", "priya", "dev", "deepak", "yusuf", "nadia", "omar", "umar", "ali", "amir",
+  "aisha", "fatima", "hassan", "imran", "khan", "mohammed", "mohammad", "ahmed", "arjun",
+  "ananya", "aarav", "rahul", "ravi", "sanjay", "sunil", "vijay", "neha", "pooja", "sana",
+  "wei", "li", "chen", "ming", "yuki", "hiro", "kenji", "sofia", "maria", "jose", "juan",
+  "carlos", "diego", "luis", "pedro", "ana", "elena", "ivan", "nikolai", "igor", "silas",
+]);
 
 export interface ReservationContext {
   db: pg.Pool;
@@ -61,6 +90,8 @@ export type ReservationState =
   | "CONFIRM_DETAILS"
   | "CONFIRM_BOOKING_CHANGE"
   | "COLLECT_EXTRAS"
+  | "CONFIRM_NAME"
+  | "SPELL_NAME"
   | "CONFIRMED"
   | "POST_CONFIRM"
   | "FIND_BOOKING"
@@ -179,6 +210,8 @@ export class ReservationMachine {
   private confirmReasks = 0;
   /** A party size we heard but aren't sure of, awaiting a yes/no ("Four people?"). */
   private pendingParty: number | undefined;
+  /** A doubtful name read back for confirmation / spelling, not yet stored. */
+  private pendingName: string | undefined;
   /** Two plausible counts from "four or five", awaiting which one. */
   private ambiguousParty: number[] | undefined;
   /** The last question we asked, for a gentle silence re-prompt (spec §11). */
@@ -308,6 +341,8 @@ export class ReservationMachine {
       case "CONFIRM_PARTY": return this.handleConfirmParty(text);
       case "OFFER_ALTERNATIVES": return this.handleAlternatives(text);
       case "COLLECT_NAME": return this.handleName(text);
+      case "CONFIRM_NAME": return this.handleConfirmName(text);
+      case "SPELL_NAME": return this.handleSpellName(text);
       case "COLLECT_PHONE": return this.handlePhone(text);
       case "COLLECT_EXTRAS": return this.handleExtras(text);
       case "CONFIRM_DETAILS": return this.handleConfirmBooking(text);
@@ -1186,10 +1221,75 @@ export class ReservationMachine {
       if (this.nameReasks >= 3) return this.beginEscalation();
       return this.say(this.nameReasks === 1 ? "I didn't catch the name — just a first name's fine." : "And what name's the booking under?", "ask_name");
     }
+    // A doubtful name (not a recognised common name, or too short) is read back
+    // for confirmation, with an offer to spell it — so a mis-hear is caught before
+    // it's booked (Kevin: "if the name is misheard, confirm it or ask them to
+    // spell it"). Common names pass straight through so most calls aren't slowed.
+    if (this.isNameDoubtful(name)) {
+      this.pendingName = name;
+      this.nameReasks = 0;
+      this.state = "CONFIRM_NAME";
+      const ack = corrAcks.length ? `No worries, I'll ${corrAcks.join(" and ")}. ` : "";
+      return this.say(`${ack}Thanks — I've got that as ${name}. Did I hear that right? If not, you can spell it out for me.`, "confirm_name");
+    }
     this.draft.name = name;
     const turn = await this.collectContact();
     if (corrAcks.length) return { ...turn, say: `No worries, I'll ${corrAcks.join(" and ")}. ${turn.say}` };
     return turn;
+  }
+
+  /** A name we're unsure of: not a recognised common first name, or too short to
+   * trust from a phone STT. Such names get a quick read-back + spell offer. */
+  private isNameDoubtful(name: string): boolean {
+    const first = name.toLowerCase().split(/\s+/)[0] ?? "";
+    if (first.replace(/[^a-z]/g, "").length <= 2) return true;
+    return !COMMON_NAMES.has(first);
+  }
+
+  /** CONFIRM_NAME: the caller confirms the read-back name, spells it, corrects it,
+   * or asks to spell — never loops (accepts the heard name after a couple of tries). */
+  private handleConfirmName(text: string): Promise<ReservationTurn> {
+    const spelled = parseSpelledName(text);
+    if (spelled) return this.acceptName(spelled);
+    if (/\b(spell|letter by letter|i'?ll spell|spell it)\b/i.test(text)) {
+      this.state = "SPELL_NAME";
+      return Promise.resolve(this.say("Of course — go ahead and spell it for me, letter by letter.", "spell_name"));
+    }
+    if (isYes(text)) return this.acceptName(this.pendingName!);
+    // A fresh name offered instead ("no, it's Dave" / "it's Priya").
+    const fresh = parseName(text);
+    if (fresh && fresh.toLowerCase() !== (this.pendingName ?? "").toLowerCase()) {
+      if (this.isNameDoubtful(fresh)) {
+        this.pendingName = fresh;
+        return Promise.resolve(this.say(`Thanks — ${fresh}. Is that right, or would you like to spell it for me?`, "confirm_name"));
+      }
+      return this.acceptName(fresh);
+    }
+    if (isNo(text)) {
+      this.state = "SPELL_NAME";
+      return Promise.resolve(this.say("No worries — could you spell it for me, letter by letter?", "spell_name"));
+    }
+    // Unclear — ask once more, then accept what we heard rather than loop.
+    this.nameReasks++;
+    if (this.nameReasks >= 2) return this.acceptName(this.pendingName!);
+    return Promise.resolve(this.say(`Sorry — did I get that as ${this.pendingName}? You can say yes, or spell it out.`, "confirm_name"));
+  }
+
+  /** SPELL_NAME: build the name from the letters the caller gives. */
+  private handleSpellName(text: string): Promise<ReservationTurn> {
+    const spelled = parseSpelledName(text);
+    if (spelled) return this.acceptName(spelled);
+    this.nameReasks++;
+    if (this.nameReasks >= 2 && this.pendingName) return this.acceptName(this.pendingName);
+    return Promise.resolve(this.say("No worries — just the letters, one at a time, like \"R, A, J, U\".", "spell_name"));
+  }
+
+  /** Store the confirmed/spelled name and carry on with the booking. */
+  private acceptName(name: string): Promise<ReservationTurn> {
+    this.draft.name = name;
+    this.pendingName = undefined;
+    this.nameReasks = 0;
+    return this.collectContact();
   }
 
   private handlePhone(text: string): Promise<ReservationTurn> {

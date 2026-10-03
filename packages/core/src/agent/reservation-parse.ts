@@ -375,6 +375,25 @@ export function parseName(text: string): string | null {
   return words.map((w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
+/**
+ * Build a name from a caller spelling it out — "R A J U", "R-A-J-U", "it's
+ * R.A.J.U", "capital R, A, J, U". Takes the sequence of single letters (so
+ * lead-in words like "it's"/"capital" are ignored) and returns the capitalised
+ * name, or null if fewer than two letters were given. (Spelling fallback when a
+ * name is mis-heard — Kevin 2026-10-03.)
+ */
+export function parseSpelledName(text: string): string | null {
+  const letters = text
+    .replace(/['`]/g, "")           // "it's" -> "its" (not a single letter)
+    .replace(/[^a-zA-Z]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length === 1);
+  if (letters.length < 2) return null;
+  const name = letters.join("").toLowerCase();
+  return name[0]!.toUpperCase() + name.slice(1);
+}
+
 const DIGIT_WORDS: Record<string, string> = {
   zero: "0", oh: "0", o: "0", ought: "0", nought: "0",
   one: "1", won: "1",
