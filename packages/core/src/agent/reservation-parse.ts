@@ -276,6 +276,7 @@ export function detectSeating(text: string): string | null {
   if (/\b(outside|outdoor|out door|alfresco|courtyard|patio|garden)\b/.test(t)) return "outdoor seating";
   if (/\b(indoors?|inside)\b/.test(t)) return "indoor seating";
   if (/\bbooth\b/.test(t)) return "booth";
+  if (/\b(quiet|secluded|away from the noise|somewhere quiet)\b/.test(t)) return "quiet table";
   return null;
 }
 
@@ -298,6 +299,7 @@ export function detectSpecialRequest(text: string): string | null {
   if (/\bkosher\b/.test(t)) notes.push("kosher");
   if (/\b(high\s?chair|highchair)\b/.test(t)) notes.push("high chair");
   if (/\b(wheelchair|accessible|accessibility|mobility)\b/.test(t)) notes.push("wheelchair access");
+  if (/\b(pram|stroller|buggy|pushchair|pushpram)\b/.test(t)) notes.push("pram space");
   if (/\b(birthday|anniversary|engagement|celebration|celebrating)\b/.test(t)) notes.push("special occasion");
   return notes.length ? [...new Set(notes)].join("; ") : null;
 }

@@ -381,6 +381,21 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     expect((b!.specialRequests || "").toLowerCase()).toContain("window");
   });
 
+  it("captures a quiet table and pram space at the special-touches turn", async () => {
+    const phone = "+61411222894";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 894"]);
+    const t = await m.next("somewhere quiet please, and we'll have a pram");
+    expect(t.kind).toBe("confirm_booking");
+    const say = t.say.toLowerCase();
+    expect(say).toContain("quiet");
+    expect(say).toContain("pram");
+    await m.next("yes");
+    const sr = ((await booking(phone))!.specialRequests || "").toLowerCase();
+    expect(sr).toContain("quiet table");
+    expect(sr).toContain("pram space");
+  });
+
   it("an occasion mentioned at the special-touches turn is noted and read back", async () => {
     const phone = "+61411222893";
     const m = mk();

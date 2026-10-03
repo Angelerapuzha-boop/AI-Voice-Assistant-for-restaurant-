@@ -338,7 +338,8 @@ export class ReservationMachine {
         .replace(/\b(?:by|near|next to|beside)?\s*(?:the\s+)?window(?:\s+seat|\s+table)?\b/gi, " ")
         .replace(/\b(?:outside|outdoors?|out door|alfresco|courtyard|patio|garden)\b/gi, " ")
         .replace(/\b(?:indoors?|inside)\b/gi, " ")
-        .replace(/\bbooth\b/gi, " ");
+        .replace(/\bbooth\b/gi, " ")
+        .replace(/\b(?:somewhere\s+)?(?:quiet|secluded)(?:\s+table|\s+spot|\s+corner)?\b/gi, " ");
     }
     const special = detectSpecialRequest(text);
     if (special && !(this.draft.specialRequests ?? "").includes(special)) {
@@ -346,7 +347,7 @@ export class ReservationMachine {
       acks.push(`Of course — I've noted that: ${special}`);
       cleaned = cleaned
         .replace(/\b(?:i'?m|we'?re|i am)?\s*allerg(?:ic|y)(?:\s+to)?\s+[a-z\s]*?(?=[.,]|$|\bplease\b|\band\b|\bthanks?\b)/gi, " ")
-        .replace(/\b(vegan|vegetarian|veggie|gluten[\s-]?free|coeliac|celiac|halal|kosher|high\s?chair|highchair|wheelchair|accessible|accessibility|mobility|birthday|anniversary|engagement|celebration|celebrating)\b/gi, " ");
+        .replace(/\b(vegan|vegetarian|veggie|gluten[\s-]?free|coeliac|celiac|halal|kosher|high\s?chair|highchair|wheelchair|accessible|accessibility|mobility|pram|stroller|buggy|pushchair|birthday|anniversary|engagement|celebration|celebrating)\b/gi, " ");
     }
     cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
     return { ack: acks.join(". "), cleaned };

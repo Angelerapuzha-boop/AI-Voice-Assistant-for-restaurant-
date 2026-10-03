@@ -154,6 +154,8 @@ describe("detectSeating", () => {
     expect(detectSeating("can we sit near the window")).toBe("window seat");
     expect(detectSeating("somewhere outside")).toBe("outdoor seating");
     expect(detectSeating("a booth if possible")).toBe("booth");
+    expect(detectSeating("somewhere quiet please")).toBe("quiet table");
+    expect(detectSeating("can we have a secluded spot")).toBe("quiet table");
   });
   it("returns null for normal answers", () => {
     expect(detectSeating("tomorrow")).toBeNull();
@@ -169,6 +171,8 @@ describe("detectSpecialRequest", () => {
     expect(detectSpecialRequest("we're vegan")).toContain("vegan");
     expect(detectSpecialRequest("it's a birthday")).toContain("special occasion");
     expect(detectSpecialRequest("we need a high chair")).toContain("high chair");
+    expect(detectSpecialRequest("we'll have a pram")).toContain("pram space");
+    expect(detectSpecialRequest("room for a stroller")).toContain("pram space");
   });
   it("returns null for normal answers", () => {
     expect(detectSpecialRequest("no special requests")).toBeNull();
