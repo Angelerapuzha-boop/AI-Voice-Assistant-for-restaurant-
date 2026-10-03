@@ -277,6 +277,7 @@ export class MediaStreamSession {
   private inUtterance = false;
   private awaitingReply = false; // a turn is being processed
   private bargeMs = 0; // sustained speech while we're speaking
+  private resBarge = false; // caller just talked over us (reservations) -> apologise next
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private commitAt = 0; // when we asked Scribe to finalise (for STT-RTT timing)
   private segmentHandled = false; // this utterance was answered off its partial (skip committed)
@@ -639,8 +640,10 @@ export class MediaStreamSession {
           this.sendClear();
           this.abort?.abort();
           // The caller talked over us — mark it so an unrecognised overlap gets
-          // a "sorry, say that again?" instead of a guess.
+          // a "sorry, say that again?" instead of a guess, and so our next reply
+          // opens with a brief apology (Kevin: respect them, never talk over).
           if (this.agent) this.agent.state.afterBarge = true;
+          this.resBarge = true;
         }
       }
       return; // don't endpoint our own audio back
@@ -952,7 +955,16 @@ export class MediaStreamSession {
   private async runReservationTurn(text: string, sttMs: number, mode: "probe" | "full"): Promise<void> {
     if (!this.resMachine || this.closed) return;
     if (mode === "probe") return; // reservations run off the committed transcript only
-    if (!text.trim()) { this.awaitingReply = false; return; }
+    if (!text.trim()) {
+      // The caller talked over us but we couldn't make out the overlap — never
+      // leave them hanging: apologise and hand them the floor (Kevin).
+      if (this.resBarge) {
+        this.resBarge = false;
+        await this.sayAndLog("Sorry — you go ahead, I'm listening.");
+      }
+      this.awaitingReply = false;
+      return;
+    }
     const db = getDb();
     this.abort = new AbortController();
     const turnStarted = Date.now();
@@ -966,6 +978,12 @@ export class MediaStreamSession {
           await recordCallEvent(db, this.callId, "turn_error", { error: String((err as Error)?.message ?? err) });
         }
         turn = { say: "Sorry, I didn't catch that — could you say that again?", kind: "error" };
+      }
+      // The caller talked over us and we DID catch it — open the reply with a brief
+      // apology so they feel heard, not steam-rolled (Kevin).
+      if (this.resBarge && turn.say) {
+        this.resBarge = false;
+        turn = { ...turn, say: `Sorry about that — ${turn.say}` };
       }
       const speakText = (turn.say || "").trim();
       const turnMs = Date.now() - turnStarted;
