@@ -92,6 +92,53 @@ export function maybeCacheSpoken(voiceId: string, text: string, buf: Buffer): vo
 }
 
 /**
+ * Cache a KNOWN-FIXED phrase even if it's long (bypasses the isCacheablePhrase
+ * length/digit guard). ONLY for lines that are invariant by construction — the
+ * greeting and the set closing lines — never for anything that carries a caller's
+ * name, number, total or date. The greeting is ~130 chars, so without this it was
+ * re-synthesised through ElevenLabs on EVERY call (the start-of-call lag Kevin
+ * reported 2026-10-07). Force-caching it makes the first audio instant thereafter. */
+export function forceCacheSpoken(voiceId: string, text: string, buf: Buffer): void {
+  if (text.trim().length > 0 && buf.length > 0 && !getCachedUlaw(voiceId, text)) {
+    putCachedUlaw(voiceId, text, buf);
+  }
+}
+
+/** Synthesise + cache a fixed phrase regardless of length (see forceCacheSpoken). */
+export async function cacheFixedPhrase(voiceId: string, text: string): Promise<void> {
+  if (!text.trim() || getCachedUlaw(voiceId, text)) return;
+  const buf = await synthesizeUlaw(voiceId, text);
+  forceCacheSpoken(voiceId, text, buf);
+}
+
+/** Pre-generate KNOWN-FIXED long phrases (greeting / closes) so they're instant on
+ * the very first call. Like warmPhrases but bypasses the length/digit guard — pass
+ * ONLY invariant lines. Safe to call repeatedly; cached phrases are skipped. */
+export async function warmFixed(
+  voiceId: string,
+  phrases: string[],
+  log?: (msg: string) => void,
+): Promise<void> {
+  const todo = [...new Set(phrases)].filter((p) => p.trim().length > 0 && !getCachedUlaw(voiceId, p));
+  if (todo.length === 0) return;
+  log?.(`tts-cache: warming ${todo.length} fixed phrase(s)`);
+  const CONCURRENCY = 3;
+  let i = 0;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, todo.length) }, async () => {
+    while (i < todo.length) {
+      const text = todo[i++]!;
+      try {
+        await cacheFixedPhrase(voiceId, text);
+      } catch (err) {
+        log?.(`tts-cache: fixed warm failed for "${text}": ${(err as Error).message}`);
+      }
+    }
+  });
+  await Promise.all(workers);
+  log?.("tts-cache: fixed warm complete");
+}
+
+/**
  * Pre-generate the fixed phrases (limited concurrency) so they are instant on
  * the very first call. Safe to call repeatedly — cached phrases are skipped,
  * failures are swallowed (lazy caching will retry on first use).

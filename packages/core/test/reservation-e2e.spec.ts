@@ -115,7 +115,7 @@ describe("reservation sweep — 100+ conversations, zero loops / false confirmat
       const phone = `+61490${String(100000 + i).slice(-6)}`;
       const date = isoDate(3 + (i % 110));
       const time = TIMES[i % TIMES.length]!;
-      const utterances = ["book a table", date, time, ...c.party, "Kevin", "yes", "no thanks", "yes please"];
+      const utterances = ["book a table", date, time, ...c.party, "Kevin", "yes", "no thanks"];
       const m = mk(phone);
       const turns = await run(m, utterances);
       const last = turns[turns.length - 1]!;
@@ -141,21 +141,31 @@ describe("reservation sweep — 100+ conversations, zero loops / false confirmat
     expect(confirmations).toBeGreaterThanOrEqual(100);
   });
 
-  it("unparseable answers fail SAFE (escalate, never confirm, never loop) — no false booking", async () => {
+  it("unparseable answers fail SAFE (escalate or hold-close, never confirm, never loop) — no false booking", async () => {
     settings = await getReservationSettings(db, ctx.restaurant.id);
     const scenarios: string[][] = [
       ["book a table", isoDate(5), "seven", "blah", "blah", "blah", "Kevin"],       // party unparseable
-      ["book a table", "asdf", "qwer", "zxcv", "Kevin"],                             // date unparseable
-      ["book a table", isoDate(7), "mumble", "mumble", "mumble", "Kevin"],           // time unparseable
+      ["book a table", "asdf", "qwer", "Zoe", "yes"],                                // date unparseable -> call-back note (name read back + confirmed)
+      ["book a table", isoDate(7), "mumble", "mumble", "mumble", "Zoe", "yes"],       // time unparseable -> call-back note
     ];
+    // An unreadable DAY now fails safe by OFFERING A HOLD then closing warmly (the
+    // caller rings back with a day) rather than escalating — also a safe, no-loop,
+    // no-false-booking terminal (live India call 2026-10-07 fix). Party/time still
+    // escalate to a call-back. All three must reach a safe terminal and book nothing.
+    const SAFE = ["escalated", "escalate_name", "escalate_phone", "hold_closed", "busy_callback"];
     for (let i = 0; i < scenarios.length; i++) {
       const phone = `+61491${String(200000 + i).slice(-6)}`;
       const m = mk(phone);
-      const turns = await run(m, scenarios[i]!);
-      const last = turns[turns.length - 1]!;
+      const all = await run(m, scenarios[i]!);
+      // Respect the hangup: once a turn ends the call the line is gone, so ignore any
+      // scripted utterances fed past it (they can't happen on a live call). A vague
+      // DAY now holds + closes immediately, so the call can end mid-script.
+      const endIdx = all.findIndex((t) => t.endCall);
+      const turns = endIdx >= 0 ? all.slice(0, endIdx + 1) : all;
       expect(noConsecutiveRepeat(turns), `scenario ${i} looped`).toBe(true);
-      // Ended in a call-back escalation, NOT a confirmed booking.
-      expect(["escalated", "escalate_name", "escalate_phone"]).toContain(last.kind);
+      // Reached a safe terminal (escalation OR warm hold-close), NOT a confirmed booking.
+      expect(turns.some((t) => SAFE.includes(t.kind)), `scenario ${i} no safe terminal: ${turns.map((t) => t.kind).join(",")}`).toBe(true);
+      expect(turns.some((t) => t.kind === "confirmed"), `scenario ${i} false confirm`).toBe(false);
       expect(m.reservation).toBeNull();
       expect((await findReservations(db, ctx.restaurant.id, phone)).length).toBe(0);
     }
@@ -185,5 +195,34 @@ describe("reservation sweep — 100+ conversations, zero loops / false confirmat
         expect(rows[0]!.partySize).toBe(5);
       }
     }
+  });
+
+  it("completes the hard live-call scenario end to end (next-week date, bundled name+request, notes, confirm)", async () => {
+    settings = await getReservationSettings(db, ctx.restaurant.id);
+    const phone = "+61490999123";
+    const m = mk(phone);
+    // NOW = Thu 2026-10-01, so "next week on Wednesday" = Oct 14 (not the coming Oct 7).
+    const turns = await run(m, [
+      "I'd like to book a table",
+      "next week on Wednesday", // the FOLLOWING week's Wednesday (Oct 14)
+      "5 PM",
+      "five",
+      "it's Kevin, and a table by the window", // name + a request in one breath
+      "yes", // use the number I'm calling from
+      "it's a birthday, and some of us are allergic to shrimps",
+      "yes please", // lock it in
+    ]);
+    const last = turns[turns.length - 1]!;
+    expect(noConsecutiveRepeat(turns)).toBe(true);
+    expect(last.kind).toBe("confirmed");
+    const rows = await findReservations(db, ctx.restaurant.id, phone);
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.partySize).toBe(5);
+    expect(r.reservationDate).toBe("2026-10-14"); // the FOLLOWING week's Wednesday
+    expect(r.reservationTime.slice(0, 5)).toBe("17:00");
+    expect(r.customerName).toBe("Kevin"); // name caught despite the window request riding along
+    expect(r.specialRequests).toMatch(/window/i);
+    expect(r.specialRequests).toMatch(/shrimp/i);
   });
 });

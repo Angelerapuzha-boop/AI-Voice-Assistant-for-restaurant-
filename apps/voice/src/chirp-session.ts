@@ -1,14 +1,16 @@
 import type { WebSocket } from "ws";
 import {
   buildKeyterms,
+  ConversationalReservationBrain,
+  createAnthropicLlm,
   endCall,
   getDb,
   getDefaultRestaurant,
   getHours,
   getReservationSettings,
   getSettings,
-  ReservationMachine,
   startCall,
+  type ReservationBrain,
 } from "@meatbox/core";
 import { muLawFrameRms, muLawToPcm16, pcm16ToBytes, pcm16ToMuLaw, upsample8to16 } from "./audio";
 import { openStt, openTts, type SttStream } from "./voice-providers";
@@ -78,7 +80,7 @@ interface ChirpDeps {
 
 export class ChirpSession {
   private stt: SttStream | null = null;
-  private machine: ReservationMachine | null = null;
+  private machine: ReservationBrain | null = null;
   private currentTts: SallyStream | null = null;
   private committedBuffer = "";
   private finalResolver: ((t: string) => void) | null = null;
@@ -137,7 +139,7 @@ export class ChirpSession {
         buildKeyterms(RESERVATION_KEYTERMS),
       );
 
-      this.machine = new ReservationMachine({
+      const resCtx = {
         db,
         restaurantId: restaurant.id,
         restaurantName: restaurant.name,
@@ -150,7 +152,15 @@ export class ChirpSession {
         address: restaurant.address,
         phoneDisplay: restaurant.phoneDisplay,
         source: "cekura_test",
-      });
+      };
+      // Cekura's test transport exists to VALIDATE the new conversational brain,
+      // so it always runs the LLM brain — independent of the phone line's
+      // BOOKING_BRAIN default, which keeps real callers on the proven brain.
+      this.machine = ConversationalReservationBrain.fromLlm(
+        resCtx,
+        createAnthropicLlm("claude-haiku-4-5"),
+        (m, meta) => this.deps.log(m, meta ?? {}),
+      );
 
       this.deps.log("chirp connected", { callId: this.callId });
       // Wall-clock endpointer: fire a turn once the caller has been silent for

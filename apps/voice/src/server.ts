@@ -15,8 +15,10 @@ import {
   settlePayment,
   SquareTerminalProvider,
   getSquareConnection,
+  ConversationalReservationBrain,
+  ReservationMachine,
 } from "@meatbox/core";
-import { warmPhrases } from "./tts-cache";
+import { warmPhrases, warmFixed } from "./tts-cache";
 import { activeVoiceId } from "./voice-providers";
 import { conversationRelayTwiml, elevenLabsSipTwiml, mediaStreamTwiml, unavailableTwiml } from "./twiml";
 import { validateTwilioSignature, verifyRelayToken } from "./twilio-signature";
@@ -188,6 +190,7 @@ app.post("/twilio/voice", async (req, reply) => {
   reply.type("text/xml");
   // Custom media-stream pipeline: our own audio + Sally at fast-path speed.
   if (env.VOICE_STACK === "custom") {
+   try {
     // TEMP test routing (2026-09-17): the owner's own phones are sent to the
     // us-east-1 cloud box for live testing; every real customer stays on this
     // (Sydney) box. A non-matching number defaults to Sydney. Remove after cutover.
@@ -230,6 +233,12 @@ app.post("/twilio/voice", async (req, reply) => {
       "routing call to custom media-stream pipeline",
     );
     return mediaStreamTwiml({ wssBase, from: params.From ?? "", source });
+   } catch (err) {
+     // An unexpected error must never 500 an INBOUND call — return valid TwiML so
+     // the caller hears a brief apology instead of Twilio's error tone.
+     req.log.error({ err: String(err), callSid }, "custom voice webhook failed");
+     return unavailableTwiml("Sorry, we can't take your call right now. Please try again in a few minutes.");
+   }
   }
   // ElevenLabs stack: hand the call to the hosted agent over SIP. The
   // Dial action falls back to the relay stack if the SIP leg fails.
@@ -351,10 +360,18 @@ app.get("/twilio/relay", { websocket: true }, (socket, req) => {
 // ------------------------------------------------------------ custom media stream WS
 
 app.get("/twilio/media", { websocket: true }, (socket, req) => {
-  new MediaStreamSession(socket, {
-    createLlm: (model) => createAnthropicLlm(model),
-    log: (msg, extra) => req.log.info(extra ?? {}, msg),
-  });
+  // A failure building the session must never throw out of the WS handler (that
+  // could take the process down mid-call for everyone). Close this socket cleanly
+  // and survive (Kevin 2026-10-06: both inbound & outbound must not crash).
+  try {
+    new MediaStreamSession(socket, {
+      createLlm: (model) => createAnthropicLlm(model),
+      log: (msg, extra) => req.log.info(extra ?? {}, msg),
+    });
+  } catch (err) {
+    req.log.error({ err: String(err) }, "failed to start media session");
+    try { socket.close(); } catch { /* noop */ }
+  }
 });
 
 // Cekura external voice-testing transport (raw-PCM 16 kHz WebSocket / CHIRP).
@@ -464,6 +481,20 @@ async function warmTtsCacheAtBoot(): Promise<void> {
   const db = getDb();
   const restaurant = await getDefaultRestaurant(db);
   const settings = await getSettings(db, restaurant.id);
+  // Reservations mode: pre-synthesise the FIXED greeting + close lines so the very
+  // first words of every call play instantly from cache instead of a per-call
+  // ElevenLabs round-trip (the start/end lag Kevin reported 2026-10-07). These are
+  // long (>80 chars) so they need warmFixed, which bypasses the length guard.
+  if (env.BUSINESS_MODE === "reservations") {
+    // Warm BOTH brains' fixed lines (they share the greetings) so instant playout
+    // holds whether a call runs the deterministic or the LLM brain.
+    const fixed = [...new Set([
+      ...ReservationMachine.fixedSpeech(restaurant.name),
+      ...ConversationalReservationBrain.fixedSpeech(restaurant.name),
+    ])];
+    await warmFixed(activeVoiceId(), fixed, (m) => app.log.info(m));
+    return;
+  }
   const phrases = new Set<string>([
     "Anything else?",
     "Done. Anything else?",

@@ -57,6 +57,25 @@ const envSchema = z.object({
   // brain; "reservations" swaps in the deterministic table-reservation state
   // machine. Default stays "ordering" so live behaviour is unchanged until cutover.
   BUSINESS_MODE: z.enum(["ordering", "reservations"]).default("ordering"),
+  // Which reservation brain answers calls (BUSINESS_MODE=reservations only).
+  // "deterministic" = the scripted state machine (proven, instant). "llm" = the
+  // new conversational brain: Haiku 4.5 interpreter understands each utterance,
+  // the deterministic engine still controls availability + the DB. Default stays
+  // deterministic until the LLM brain is proven on live calls, then we cut over.
+  BOOKING_BRAIN: z.enum(["deterministic", "llm"]).default("deterministic"),
+  // Phone callers (comma-separated E.164) who get the LLM brain even when
+  // BOOKING_BRAIN=deterministic — so the new brain can be tested on specific
+  // numbers (owner's test phones) while every real caller stays on the proven
+  // deterministic brain. Cekura's own test transport always uses the LLM brain.
+  BOOKING_BRAIN_CALLERS: z.string().default(""),
+  // Big-group bookings. A party ABOVE the per-table limit (reservation_settings
+  // .maxPartySize) but at or below this is booked STRAIGHT INTO THE PARTY HALL
+  // (the separate function room), not handed to the team (Kevin 2026-10-09:
+  // "book them straight into the party hall"). The hall is its own space, so
+  // these bookings don't consume — or get blocked by — the main-floor per-slot
+  // cover limit. A party above this is genuinely too big for a phone booking and
+  // still goes to a team call-back. Owner-adjustable without a redeploy.
+  PARTY_HALL_MAX_SIZE: z.coerce.number().default(50),
   // Record EVERY inbound call. Off by default. When "true", callers hear a
   // "this call may be recorded" notice at the start (AU consent).
   RECORD_ALL_INBOUND: z.string().default(""),
@@ -143,6 +162,18 @@ export const CEKURA_TEST_CALLERS = new Set(
 /** True when a caller ID belongs to the Cekura test pool (synthetic test call). */
 export function isCekuraTestCaller(from: string | null | undefined): boolean {
   return !!from && CEKURA_TEST_CALLERS.has(from);
+}
+
+/** Phone numbers put on the LLM brain even when BOOKING_BRAIN=deterministic. */
+export const BOOKING_BRAIN_CALLERS = new Set(
+  env.BOOKING_BRAIN_CALLERS.split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+/** Should this phone caller get the new LLM conversational brain? True when the
+ * global flag is "llm", or this specific number is on the LLM test allowlist. */
+export function useLlmBrainForCaller(from: string | null | undefined): boolean {
+  if (env.BOOKING_BRAIN === "llm") return true;
+  return !!from && BOOKING_BRAIN_CALLERS.has(from);
 }
 
 export function requireEnv(key: keyof Env): string {

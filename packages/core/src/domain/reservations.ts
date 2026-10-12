@@ -114,6 +114,10 @@ export interface AvailabilityInput {
   partySize: number;
   /** When re-checking for a modify, ignore this reservation's own covers. */
   excludeReservationId?: string;
+  /** Book into the party hall / function room: the big-group size cap and the
+   * main-floor per-slot cover limit don't apply (the hall is its own space), but
+   * opening hours / past-date / min-advance are still enforced (Kevin 2026-10-09). */
+  allowPartyHall?: boolean;
 }
 
 /** Covers already booked that OVERLAP a candidate time (turnover window). */
@@ -137,7 +141,9 @@ export async function checkAvailability(input: AvailabilityInput): Promise<Avail
 
   if (!settings.reservationsEnabled) return { status: "CLOSED", alternatives: none };
   if (!Number.isInteger(partySize) || partySize < 1) return { status: "INVALID_DATE", alternatives: none };
-  if (partySize > settings.maxPartySize) return { status: "PARTY_TOO_LARGE", alternatives: none };
+  // A party hall booking isn't bound by the per-table size cap (it's the separate
+  // function room); its upper bound (the hall's capacity) is enforced by the caller.
+  if (!input.allowPartyHall && partySize > settings.maxPartySize) return { status: "PARTY_TOO_LARGE", alternatives: none };
 
   const today = localToday(now, timezone);
   const todayIso = `${today.year}-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`;
@@ -157,18 +163,24 @@ export async function checkAvailability(input: AvailabilityInput): Promise<Avail
 
   // Confirmed covers on that date.
   const res = await input.db.query(
-    `SELECT reservation_time, party_size FROM reservations
+    `SELECT reservation_time, party_size, special_requests FROM reservations
       WHERE restaurant_id = $1 AND reservation_date = $2 AND status = 'CONFIRMED'
         AND ($3::uuid IS NULL OR id <> $3)`,
     [input.restaurantId, date, input.excludeReservationId ?? null],
   );
-  const existing = res.rows.map((r) => ({
-    minutes: toMinutes(String(r.reservation_time)),
-    partySize: Number(r.party_size),
-  }));
+  const existing = res.rows
+    // Party-hall bookings occupy the separate function room, not the main floor,
+    // so they never count against the per-slot table capacity (Kevin 2026-10-09).
+    .filter((r) => !isPartyHallRow(r.special_requests))
+    .map((r) => ({
+      minutes: toMinutes(String(r.reservation_time)),
+      partySize: Number(r.party_size),
+    }));
 
   const fits = (candidateMin: number): boolean =>
-    coversAt(existing, candidateMin, settings.turnoverMinutes) + partySize <= settings.maxCoversPerSlot &&
+    // The party hall is its own space, so main-floor covers don't gate it — only
+    // opening hours and the min-advance window apply.
+    (input.allowPartyHall || coversAt(existing, candidateMin, settings.turnoverMinutes) + partySize <= settings.maxCoversPerSlot) &&
     withinHours(hours, dowOfIso(date), candidateMin) &&
     !(dayDelta === 0 && candidateMin < nowMin + settings.minAdvanceMinutes);
 
@@ -205,6 +217,22 @@ export interface CreateReservationInput {
   source?: string;
   callId?: string | null;
   idempotencyKey?: string | null;
+  /** 'unresolved' when the name could not be captured and the booking is held
+   * under the caller's phone number (never a guessed name). Defaults to 'provided'. */
+  nameStatus?: "provided" | "unresolved";
+  /** Flag the row for a human to follow up (e.g. to confirm an unresolved name). */
+  needsStaffAttention?: boolean;
+  /** Book into the separate party hall / function room: the per-slot main-floor
+   * cover limit does not apply (the hall is its own space), so a big group above
+   * maxPartySize can be booked directly (Kevin 2026-10-09). The caller is expected
+   * to tag specialRequests with "party hall" so it's excluded from floor covers. */
+  partyHall?: boolean;
+}
+
+/** A reservation that sits in the separate party hall / function room (tagged in
+ * special_requests) — excluded from main-floor per-slot cover accounting. */
+function isPartyHallRow(specialRequests: unknown): boolean {
+  return /party hall/i.test(String(specialRequests ?? ""));
 }
 
 export interface CreateReservationResult {
@@ -268,15 +296,22 @@ export async function createReservation(
     // callers both taking the last seats on stale availability.
     await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${input.restaurantId}:${input.date}`]);
     const slot = await tx.query(
-      `SELECT reservation_time, party_size FROM reservations
+      `SELECT reservation_time, party_size, special_requests FROM reservations
         WHERE restaurant_id = $1 AND reservation_date = $2 AND status = 'CONFIRMED'`,
       [input.restaurantId, input.date],
     );
     const reqMin = toMinutes(`${input.time}:00`);
     const covers = slot.rows
+      // Party-hall bookings sit in the separate function room — they neither
+      // consume main-floor covers nor get blocked by the per-slot limit.
+      .filter((r) => !isPartyHallRow(r.special_requests))
       .filter((r) => Math.abs(toMinutes(String(r.reservation_time)) - reqMin) < settings.turnoverMinutes)
       .reduce((sum, r) => sum + Number(r.party_size), 0);
-    if (covers + input.partySize > settings.maxCoversPerSlot) throw new ReservationCapacityError();
+    // A party-hall booking uses the function room's own capacity, so the main-
+    // floor per-slot cover limit does not gate it (Kevin 2026-10-09: just book it).
+    if (!input.partyHall && covers + input.partySize > settings.maxCoversPerSlot) {
+      throw new ReservationCapacityError();
+    }
 
     const ref = await genUniqueRef(tx, input.restaurantId, settings.refPrefix);
     // Savepoint so a race that hits the unique index can be recovered without
@@ -287,14 +322,16 @@ export async function createReservation(
         `INSERT INTO reservations
            (restaurant_id, public_ref, customer_name, customer_phone, reservation_date,
             reservation_time, party_size, special_requests, high_chair, accessibility,
-            occasion, seating_pref, source, call_id, idempotency_key)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            occasion, seating_pref, source, call_id, idempotency_key,
+            name_status, needs_staff_attention)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          RETURNING *`,
         [
           input.restaurantId, ref, input.customerName, input.customerPhone, input.date,
           input.time, input.partySize, input.specialRequests ?? "", input.highChair ?? false,
           input.accessibility ?? false, input.occasion ?? "", input.seatingPref ?? "",
           input.source ?? "phone", input.callId ?? null, input.idempotencyKey ?? null,
+          input.nameStatus ?? "provided", input.needsStaffAttention ?? false,
         ],
       );
       const reservation = camelRow<Reservation>(inserted.rows[0]!);
@@ -349,6 +386,18 @@ export async function getReservationByRef(
     `SELECT * FROM reservations WHERE restaurant_id = $1 AND upper(public_ref) = upper($2) LIMIT 1`,
     [restaurantId, ref],
   );
+  return res.rows[0] ? camelRow<Reservation>(res.rows[0]) : null;
+}
+
+/** Re-read a reservation straight from the database by its id. The spoken
+ * confirmation and the SMS are built from THIS persisted record — not from the
+ * conversational state, the LLM, or a prior revision — so what the caller hears
+ * and is texted is exactly what was saved (Kevin 2026-10-10 DB consistency gate). */
+export async function getReservationById(
+  db: Queryable,
+  id: string,
+): Promise<Reservation | null> {
+  const res = await db.query(`SELECT * FROM reservations WHERE id = $1 LIMIT 1`, [id]);
   return res.rows[0] ? camelRow<Reservation>(res.rows[0]) : null;
 }
 

@@ -157,7 +157,10 @@ export interface SallyStream {
 export function openSallyStream(voiceId: string): SallyStream {
   const url =
     `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input` +
-    `?model_id=eleven_flash_v2&output_format=ulaw_8000&optimize_streaming_latency=4` +
+    // Warmer, more natural "two-people-talking" feel (Kevin 2026-10-05, matches the
+    // reference audio): turbo_v2_5 is richer than flash; latency 2 trades ~150ms of
+    // first-audio for noticeably smoother prosody — reads as a human beat, not lag.
+    `?model_id=eleven_turbo_v2_5&output_format=ulaw_8000&optimize_streaming_latency=2` +
     `&inactivity_timeout=180`; // opened at caller-speech-start; must survive a long utterance
   const ws = new WebSocket(url, { headers: { "xi-api-key": XI_KEY() } });
   let aborted = false;
@@ -172,7 +175,7 @@ export function openSallyStream(voiceId: string): SallyStream {
     ws.send(
       JSON.stringify({
         text: " ",
-        voice_settings: { stability: 0.5, similarity_boost: 0.9, speed: 1.0, use_speaker_boost: true },
+        voice_settings: { stability: 0.4, similarity_boost: 0.9, style: 0.2, speed: 0.96, use_speaker_boost: true },
         generation_config: { chunk_length_schedule: [90, 130, 180, 250] },
       }),
     );

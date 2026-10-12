@@ -34,11 +34,15 @@ describe("normaliseDate", () => {
     expect(r.date! <= "2026-10-08").toBe(true);
   });
 
-  it("'next Saturday' is a week later than 'Saturday'", () => {
+  it("'next <weekday>' is the COMING occurrence, not a week out (Kevin 2026-10-05)", () => {
+    // For a restaurant booking "next Tuesday" means the coming Tuesday, same as a
+    // bare/"this" weekday. Only "<weekday> week" means the following week.
     const thisSat = normaliseDate("this Saturday", { now: NOW, timezone: TZ }).date!;
     const nextSat = normaliseDate("next Saturday", { now: NOW, timezone: TZ }).date!;
+    const bareSat = normaliseDate("Saturday", { now: NOW, timezone: TZ }).date!;
     expect(dow(nextSat)).toBe(6);
-    expect(nextSat > thisSat).toBe(true);
+    expect(nextSat).toBe(thisSat);
+    expect(nextSat).toBe(bareSat);
   });
 
   it("'Friday week' is the following week's Friday", () => {
@@ -46,6 +50,46 @@ describe("normaliseDate", () => {
     const friWeek = normaliseDate("Friday week", { now: NOW, timezone: TZ }).date!;
     expect(dow(friWeek)).toBe(5);
     expect(friWeek > fri).toBe(true);
+  });
+
+  it("'next week on <weekday>' / 'the following <weekday>' = the FOLLOWING week (Kevin 2026-10-05)", () => {
+    const thisWed = normaliseDate("Wednesday", { now: NOW, timezone: TZ }).date!;
+    const nextWeekWed = normaliseDate("next week on Wednesday", { now: NOW, timezone: TZ }).date!;
+    const followingWed = normaliseDate("the following Wednesday", { now: NOW, timezone: TZ }).date!;
+    const inFollowingWeek = normaliseDate("the Wednesday in the following week", { now: NOW, timezone: TZ }).date!;
+    expect(dow(nextWeekWed)).toBe(3);
+    expect(nextWeekWed > thisWed).toBe(true); // a week later than the coming Wednesday
+    expect(followingWed).toBe(nextWeekWed);
+    expect(inFollowingWeek).toBe(nextWeekWed);
+    // ...but a plain "next <weekday>" (no "week") is still the COMING one
+    const nextTue = normaliseDate("next Tuesday", { now: NOW, timezone: TZ }).date!;
+    const thisTue = normaliseDate("Tuesday", { now: NOW, timezone: TZ }).date!;
+    expect(nextTue).toBe(thisTue);
+  });
+
+  it("'in N weeks' / 'a fortnight' push the weekday out N weeks (Kevin 2026-10-05)", () => {
+    // NOW = Thursday 2026-10-01. "in two weeks on Thursday" = Oct 15 (today + 14).
+    const inTwoWeeksThu = normaliseDate("in two weeks on Thursday", { now: NOW, timezone: TZ }).date!;
+    const aboutTwoWeeks = normaliseDate("in about two weeks' time on Thursday", { now: NOW, timezone: TZ }).date!;
+    expect(dow(inTwoWeeksThu)).toBe(4);
+    expect(inTwoWeeksThu).toBe("2026-10-15");
+    expect(aboutTwoWeeks).toBe("2026-10-15");
+    const fortnightFri = normaliseDate("a fortnight on Friday", { now: NOW, timezone: TZ }).date!;
+    expect(dow(fortnightFri)).toBe(5);
+    expect(fortnightFri).toBe("2026-10-16"); // coming Fri Oct 2 + 14
+  });
+
+  it("weekend + 'after next' phrasings (date battery 2026-10-05)", () => {
+    const thisWknd = normaliseDate("this weekend", { now: NOW, timezone: TZ }).date!;
+    const nextWknd = normaliseDate("next weekend", { now: NOW, timezone: TZ }).date!;
+    expect(dow(thisWknd)).toBe(6); // Saturday
+    expect(dow(nextWknd)).toBe(6);
+    expect(nextWknd > thisWknd).toBe(true);
+    // "the Wednesday after next" = the Wednesday after the coming one
+    const comingWed = normaliseDate("Wednesday", { now: NOW, timezone: TZ }).date!;
+    const wedAfterNext = normaliseDate("the Wednesday after next", { now: NOW, timezone: TZ }).date!;
+    expect(dow(wedAfterNext)).toBe(3);
+    expect(wedAfterNext > comingWed).toBe(true);
   });
 
   it("resolves 'the 14th' to this month (or next if passed)", () => {
@@ -125,5 +169,25 @@ describe("normaliseTime", () => {
 
   it("rejects nonsense time", () => {
     expect(normaliseTime("banana").error).toBe("INVALID_TIME");
+  });
+});
+
+describe("normaliseTime — a DURATION is never a clock time (live calls 2026-10-05/06)", () => {
+  it("'two weeks' / 'three days' etc. do NOT parse as 2 PM / 3 o'clock", () => {
+    expect(normaliseTime("two weeks").error).toBe("INVALID_TIME");
+    expect(normaliseTime("in two weeks").error).toBe("INVALID_TIME");
+    expect(normaliseTime("in about two weeks time").error).toBe("INVALID_TIME");
+    expect(normaliseTime("three days").error).toBe("INVALID_TIME");
+    expect(normaliseTime("a fortnight").error).toBe("INVALID_TIME");
+    expect(normaliseTime("four weeks from now").error).toBe("INVALID_TIME");
+  });
+  it("still reads a real time stated alongside a duration phrase", () => {
+    // Caller gives the day as a duration AND an actual clock time in one breath.
+    expect(normaliseTime("two weeks on Thursday at 7 pm").time).toBe("19:00");
+    expect(normaliseTime("in two weeks at half seven").time).toBe("19:30");
+  });
+  it("leaves a plain hour untouched (regression guard for the strip)", () => {
+    expect(normaliseTime("seven").time).toBe("19:00");
+    expect(normaliseTime("9 PM").time).toBe("21:00");
   });
 });

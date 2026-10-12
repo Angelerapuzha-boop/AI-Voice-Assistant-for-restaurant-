@@ -242,7 +242,10 @@ describe("call-quality fixes from listening to recordings (Kevin's 6 items)", ()
   it("#2/#6 does NOT hang up on a vague reply — gives the caller their last word", async () => {
     const phone = "+61411222822";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 822", "no thanks", "yes please"]);
+    // "no thanks" at the confirm beat books straight away (nothing more to add) —
+    // matching the reference ("No, that's it." -> confirmed). The POST_CONFIRM beat
+    // then gives the caller their last word.
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Pat", "0411 222 822", "no thanks"]);
     const vague = await m.next("um");
     expect(vague.endCall).toBeFalsy();
     expect(vague.kind).toBe("anything_else");
@@ -274,7 +277,7 @@ describe("call-quality fixes from listening to recordings (Kevin's 6 items)", ()
     expect(t.say.toLowerCase()).toContain("friday");
     const t2 = await m.next("Friday please");
     expect(t2.kind).toBe("ask_time"); // resumes collection
-    await play(m, ["7 pm", "two", "Gina", "0411 222 825", "no thanks", "yes please"]);
+    await play(m, ["7 pm", "two", "Gina", "0411 222 825", "no thanks"]);
     const b = await booking(phone);
     expect(b).toBeTruthy();
     expect(dow(b!.reservationDate)).toBe(5); // Friday
@@ -286,11 +289,9 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     const phone = "+61411222871";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar"]);
-    const te = await m.next("0411 222 871");
-    expect(te.kind).toBe("ask_extras"); // dedicated special-touches turn first
-    const t = await m.next("no thanks");
-    expect(t.kind).toBe("confirm_booking"); // reads it back, asks to lock in
-    expect(t.say.toLowerCase()).toMatch(/lock that in/);
+    const t = await m.next("0411 222 871");
+    expect(t.kind).toBe("confirm_booking"); // phone -> straight to confirm (brief — no full re-read)
+    expect(t.say.toLowerCase()).toMatch(/lock (it|that) in/);
     expect(t.endCall).toBeFalsy();
     expect(await booking(phone)).toBeUndefined(); // NOT booked yet
     const t2 = await m.next("yes please");
@@ -311,9 +312,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
   it("a plain 'no' opens a change, then re-confirms and books the change", async () => {
     const phone = "+61411222873";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 873"]);
-    await m.next("no thanks"); // the special-touches turn
-    const t = await m.next("no");
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 873"]);    const t = await m.next("no");
     expect(t.kind).toBe("confirm_change");
     const t2 = await m.next("make it four");
     expect(t2.kind).toBe("confirm_booking"); // re-reads the updated booking
@@ -325,13 +324,29 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
   it("a direct change at the confirm step ('no, make it six') re-reads and books the change", async () => {
     const phone = "+61411222874";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "four", "Omar", "0411 222 874"]);
-    await m.next("no thanks"); // the special-touches turn
-    const t = await m.next("no, make it six");
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Omar", "0411 222 874"]);    const t = await m.next("no, make it six");
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/six/i);
     await m.next("yes");
     expect((await booking(phone))!.partySize).toBe(6);
+  });
+
+  // Live India call 2026-10-07: "change the day to Sunday or Monday" at the confirm
+  // beat silently picked one (or was dropped). A TWO-option day change must be
+  // CLARIFIED, then re-checked and re-confirmed — never guessed.
+  it("a two-day change at the confirm step is clarified, not silently picked", async () => {
+    const phone = "+61411222896";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "four", "Omar", "0411 222 896"]);
+    const t = await m.next("can you change the day to Saturday or Sunday?");
+    expect(t.kind).toBe("confirm_date");
+    expect(t.say.toLowerCase()).toContain("saturday");
+    expect(t.say.toLowerCase()).toContain("sunday");
+    const t2 = await m.next("the first one");       // Saturday (option A)
+    expect(t2.kind).toBe("confirm_booking");         // re-checked + back to the lock beat
+    await m.next("yes");
+    const b = await booking(phone);
+    expect(dow(b!.reservationDate)).toBe(6);         // Saturday — the chosen option
   });
 
   // Kevin's live call: he said "Raju" but it was mis-heard and booked as "Got",
@@ -339,9 +354,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
   it("a NAME correction at the confirm step is applied ('no, the name's Raju')", async () => {
     const phone = "+61411222881";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Mark", "0411 222 881"]);
-    await m.next("no thanks"); // the special-touches turn
-    const t = await m.next("no, the name's Raju");
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Mark", "0411 222 881"]);    const t = await m.next("no, the name's Raju");
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/raju/i);
     await m.next("yes");
@@ -351,9 +364,7 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
   it("a NAME change via the 'what would you like to change' path is applied", async () => {
     const phone = "+61411222882";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Mark", "0411 222 882"]);
-    await m.next("no thanks"); // the special-touches turn
-    await m.next("no"); // -> what would you like to change
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Mark", "0411 222 882"]);    await m.next("no"); // -> what would you like to change
     const t = await m.next("the name is Raju");
     expect(t.kind).toBe("confirm_booking");
     expect(t.say).toMatch(/raju/i);
@@ -361,59 +372,75 @@ describe("confirm beat before booking (Kevin: a clear gap to say confirmed or ca
     expect((await booking(phone))!.customerName.toLowerCase()).toContain("raju");
   });
 
-  it("asks the special-touches question (occasion / seating / dietary) as its own turn", async () => {
-    const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar"]);
-    const t = await m.next("0411 222 891");
-    expect(t.kind).toBe("ask_extras");
-    expect(t.say.toLowerCase()).toMatch(/special|seating|dietary|occasion/);
-  });
-
-  it("a special request given at the special-touches turn is noted and read back at confirm", async () => {
+  // No proactive preferences question any more (Kevin 2026-10-07) — but a preference
+  // the caller VOLUNTEERS at the confirm beat is still captured + acked, then booked.
+  it("a volunteered seating request at the confirm beat is noted and acked", async () => {
     const phone = "+61411222892";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 892"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 892"]); // -> confirm
     const t = await m.next("actually, can we sit by the window?");
-    expect(t.kind).toBe("confirm_booking");
-    expect(t.say.toLowerCase()).toContain("window");
-    await m.next("yes");
+    expect(t.say.toLowerCase()).toContain("window"); // acked right away
+    await m.next("yes please"); // -> booked
     const b = await booking(phone);
     expect((b!.specialRequests || "").toLowerCase()).toContain("window");
   });
 
-  it("captures a quiet table and pram space at the special-touches turn", async () => {
+  it("captures a quiet table and pram space volunteered at the confirm beat", async () => {
     const phone = "+61411222894";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 894"]);
     const t = await m.next("somewhere quiet please, and we'll have a pram");
-    expect(t.kind).toBe("confirm_booking");
     const say = t.say.toLowerCase();
     expect(say).toContain("quiet");
-    expect(say).toContain("pram");
-    await m.next("yes");
+    expect(say).toContain("note"); // ack confirms a note was made (raw note not echoed); pram stored below
+    await m.next("yes please");
     const sr = ((await booking(phone))!.specialRequests || "").toLowerCase();
     expect(sr).toContain("quiet table");
     expect(sr).toContain("pram space");
   });
 
-  it("an occasion mentioned at the special-touches turn is noted and read back", async () => {
+  it("an occasion volunteered at the confirm beat is noted and acked", async () => {
     const phone = "+61411222893";
     const m = mk();
     await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 893"]);
     const t = await m.next("it's our anniversary");
-    expect(t.kind).toBe("confirm_booking");
-    expect(t.say.toLowerCase()).toContain("occasion"); // "I've noted special occasion"
-    await m.next("yes");
+    expect(t.say.toLowerCase()).toContain("anniversary"); // warm, specific ack
+    await m.next("yes please");
     const b = await booking(phone);
-    expect((b!.specialRequests || "").toLowerCase()).toContain("occasion");
+    expect((b!.specialRequests || "").toLowerCase()).toContain("anniversary"); // specific occasion stored
+  });
+
+  it("'no allergies' is NOT recorded as a false note (transcript 2026-10-06)", async () => {
+    const phone = "+61411222895";
+    const m = mk();
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", "0411 222 895"]); // -> confirm
+    await m.next("yes please"); // book (no preference question was asked)
+    const sr = ((await booking(phone))!.specialRequests || "").toLowerCase();
+    expect(sr).not.toContain("allergy"); // nothing falsely stored
+  });
+
+  // Bug 2026-10-07: a DECLINE-to-add at the confirm beat ("no allergies", "no
+  // occasion", "nothing special", "no thanks") was mis-routed to "what would you
+  // like to change?" — a confusing non-sequitur when the caller clearly had nothing
+  // more to add. It must now book straight away, matching the reference audio
+  // ("Anything else before I confirm?" -> "No, that's it." -> confirmed).
+  it("a decline-to-add at the confirm beat books straight away (never 'what to change?')", async () => {
+    const declines = ["no allergies thanks", "no occasion", "no, nothing special", "no thanks", "that's it", "nothing else", "no we're good"];
+    for (let i = 0; i < declines.length; i++) {
+      const phone = `+61411333${String(100 + i)}`;
+      const m = mk();
+      await play(m, ["book a table", "tomorrow", "seven", "two", "Omar", phone.replace("+61", "0")]);
+      const t = await m.next(declines[i]!);
+      expect(t.kind, `"${declines[i]}" should book`).toBe("confirmed");
+      expect(t.say, `"${declines[i]}" must not ask what to change`).not.toMatch(/what would you like to change/i);
+      expect((await booking(phone))!.partySize).toBe(2);
+    }
   });
 
   it("GUARD: 'the time' at the change step is not stored as the name", async () => {
     const phone = "+61411222883";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 883"]);
-    await m.next("no thanks"); // the special-touches turn
-    await m.next("no"); // -> what would you like to change
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 883"]);    await m.next("no"); // -> what would you like to change
     const t = await m.next("the time"); // wants to change time but hasn't named one yet
     expect(t.kind).toBe("confirm_change"); // re-ask, NOT booked, NOT name="time"
     await m.next("eight pm");
@@ -428,7 +455,7 @@ describe("end-of-call: confirm locks in, sudden cancel drops it (Kevin: feel hum
   it("a literal 'confirm' at the confirm beat locks the booking in", async () => {
     const phone = "+61411222901";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 901", "no thanks"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 901"]);
     const t = await m.next("confirm");
     expect(t.kind).toBe("confirmed");
     expect((await booking(phone))!.partySize).toBe(2);
@@ -437,7 +464,7 @@ describe("end-of-call: confirm locks in, sudden cancel drops it (Kevin: feel hum
   it("a bare 'go ahead' at the confirm beat locks it in", async () => {
     const phone = "+61411222902";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 902", "no thanks"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 902"]);
     const t = await m.next("go ahead");
     expect(t.kind).toBe("confirmed");
   });
@@ -445,7 +472,7 @@ describe("end-of-call: confirm locks in, sudden cancel drops it (Kevin: feel hum
   it("a sudden 'cancel it' at the confirm beat books NOTHING", async () => {
     const phone = "+61411222903";
     const m = mk();
-    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 903", "no thanks"]);
+    await play(m, ["book a table", "tomorrow", "seven", "two", "Dave", "0411 222 903"]);
     const t = await m.next("actually, cancel it");
     expect(t.kind).toBe("booking_abandoned");
     expect(t.endCall).toBe(true);
@@ -499,9 +526,12 @@ describe("doubtful-name confirmation + spelling (Kevin: confirm or spell a mis-h
     await m.next("Zephyrine"); // -> confirm_name
     const t = await m.next("no, let me spell it"); // -> spell_name
     expect(t.kind).toBe("spell_name");
-    const t2 = await m.next("Z A P H I R"); // builds "Zaphir"
-    expect(t2.kind).toBe("ask_phone"); // name accepted, moves on
-    await play(m, ["0411 222 898", "no thanks", "yes please"]);
+    const t2 = await m.next("Z A P H I R"); // builds "Zaphir" -> read back to confirm
+    expect(t2.kind).toBe("confirm_name");
+    expect(t2.say.toLowerCase()).toContain("zaphir");
+    const t3 = await m.next("yes");         // confirmed -> moves on
+    expect(t3.kind).toBe("ask_phone");
+    await play(m, ["0411 222 898", "no thanks"]);
     expect((await booking(phone))!.customerName.toLowerCase()).toContain("zaphir");
   });
 

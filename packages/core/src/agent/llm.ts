@@ -28,6 +28,10 @@ export interface LlmParams {
   tools: LlmToolDef[];
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Force the model to call a specific tool (structured output), let it pick
+   * any tool, or leave it to choose. The reservation interpreter forces its
+   * single "interpret" tool so every turn yields a validated JSON object. */
+  toolChoice?: { type: "tool"; name: string } | { type: "any" } | { type: "auto" };
 }
 
 export interface Llm {
@@ -83,6 +87,7 @@ export function createAnthropicLlm(model?: string): Llm {
         ],
         messages: prepared,
         tools,
+        ...(params.toolChoice ? { tool_choice: params.toolChoice } : {}),
       } as Parameters<Anthropic["messages"]["stream"]>[0];
       // Low effort: phone ordering is simple and latency-critical — this
       // keeps Sonnet's instruction-following while answering much faster.

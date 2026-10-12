@@ -18,17 +18,20 @@ import {
   OrderAgent,
   recordCallEvent,
   ReservationMachine,
+  ConversationalReservationBrain,
   getReservationSettings,
   startCall,
+  useLlmBrainForCaller,
   type CallOutcome,
   type Llm,
+  type ReservationBrain,
 } from "@meatbox/core";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { muLawDecodeSample, muLawEncodeSample, muLawFrameRms } from "./audio";
 import { type SallyStream } from "./elevenlabs-stream";
 import { activeVoiceId, openStt, openTts, ttsSupportsWarmup, type SttStream } from "./voice-providers";
-import { getCachedUlaw, maybeCacheSpoken } from "./tts-cache";
+import { getCachedUlaw, maybeCacheSpoken, forceCacheSpoken } from "./tts-cache";
 
 // Restaurant ambience loop (PCM16 8kHz mono), loaded once and cached. Mixed
 // quietly under the AI's voice AND played in the gaps between turns, so the
@@ -90,20 +93,27 @@ const SPEECH_RMS = 550; // above this = voice present
 // mid-phrase pause so the caller finishes their thought; the small extra wait
 // reads as natural human turn-taking, not lag, and it prevents far worse
 // fragment-induced lag downstream. Overridable via env for live tuning.
-// Kevin 2026-09-25: the natural sweet spot — "give time to finish, but no big
-// lag/gap after they finish, then reply". So the base wait is a natural beat
-// (900ms — not the clippy 700 that cut him off, not the gappy 1100), and the
-// REAL anti-cut-off work is done by endsMidThought() below: any sign the caller
-// is still mid-sentence extends the wait to ENDPOINT_HESITATION_MS. Net: a clear
-// finish gets a snappy reply; an unfinished one waits. Env-overridable.
-const ENDPOINT_SILENCE_MS = Number(process.env.ENDPOINT_SILENCE_MS) || 900;
+// Kevin 2026-09-25: "give time to finish, but no big lag after they finish".
+// Base wait is a natural beat. RAISED 900→1500 (Kevin 2026-10-09: "so much rush,
+// not even giving me time to speak" — on a slower cadence / laggy line, 900ms cut
+// him off on a mid-sentence pause, e.g. "7, uh, 9 PM" committed at "7"). The REAL
+// anti-cut-off work is endsMidThought() below, which extends to
+// ENDPOINT_HESITATION_MS. Env-overridable (box sets ENDPOINT_SILENCE_MS).
+const ENDPOINT_SILENCE_MS = Number(process.env.ENDPOINT_SILENCE_MS) || 1500;
 // Adaptive endpointing: when the caller trails off MID-THOUGHT — a hesitation
 // ("uh…"), a dangling connector ("garlic and…", "make it…"), or a change lead
 // ("actually…") — give them extra room to finish CHANGING THEIR MIND instead of
 // jumping in and talking over them. Only applies when the tail signals more is
 // coming, so a finished phrase still endpoints fast (no added lag). Kevin
 // 2026-09-24: curveballs/changes need space or the conversation overlaps.
-const ENDPOINT_HESITATION_MS = Number(process.env.ENDPOINT_HESITATION_MS) || 2000;
+const ENDPOINT_HESITATION_MS = Number(process.env.ENDPOINT_HESITATION_MS) || 3000;
+// Stuck-in-utterance recovery: the VAD commits on TRAILING SILENCE, but line noise
+// or room ambience above SPEECH_RMS can keep "voice" true so silence never
+// accumulates — the utterance stays open and the caller gets dead air (the ambience
+// bed is muted while in-utterance too). Live call 2026-10-05: a "Yes" went
+// uncommitted ~14s until the caller said "Hello?" thinking the call had dropped. If
+// the STT text stops changing for this long we commit anyway, regardless of energy.
+const PARTIAL_STALL_MS = Number(process.env.PARTIAL_STALL_MS) || 2200;
 // Bare quantity words that, when they END an utterance mid-order, mean an item
 // is still coming ("I'll get TWO…", "gimme THREE…") — hold instead of cutting in.
 // Guarded in endsMidThought so a complete qty answer ("make it two", bare "two")
@@ -169,6 +179,9 @@ export function endsMidThought(text: string): boolean {
 // late real barge.)
 const BARGE_RMS = 1600; // near-end speech; echo returns attenuated, below this
 const BARGE_SPEECH_MS = 320; // sustained — filters echo bursts and line noise
+// After a barge-in, treat the line as active briefly so the silence watchdog can't
+// close right after the caller interrupted us (Kevin 2026-10-10: no recent interruption).
+const BARGE_SETTLE_MS = 2500;
 const MIN_UTTERANCE_MS = 200; // ignore blips shorter than this
 
 // Common first names to bias the STT toward at the name step (a name is
@@ -188,6 +201,13 @@ const COMMON_FIRST_NAMES = [
 // in silence: nudge once or twice, then bow out politely so the call can't hang.
 const IDLE_NUDGE_MS = Number(process.env.IDLE_NUDGE_MS) || 9000;
 const IDLE_MAX_NUDGES = 2;
+// When the CALLER explicitly asks us to wait ("hold on", "give me a sec"), a
+// human receptionist waits comfortably instead of nagging 9s later ("Take your
+// time" fired, then re-asked while I was still finding my card" — the rushing
+// complaint). For this grace window the idle watchdog stays silent; afterwards
+// the normal silence cadence resumes, so a caller who truly vanished is still
+// caught by the two-nudge bow-out and the line never hangs in dead air.
+const WAIT_GRACE_MS = Number(process.env.WAIT_GRACE_MS) || 25000;
 // Short, plain fillers spoken on a GENUINE LLM turn (novel/garbled speech) so
 // the ~1-2s think isn't dead air (owner chose filler over silence 2026-09-19).
 // RARE now — ordering, options, drinks, swaps, changes, removals, cancels,
@@ -250,7 +270,7 @@ export class MediaStreamSession {
   private streamSid = "";
   private callId: string | null = null;
   private agent: OrderAgent | null = null;
-  private resMachine: ReservationMachine | null = null;
+  private resMachine: ReservationBrain | null = null;
   private scribe: SttStream | null = null;
   private abort: AbortController | null = null;
   private speaking: SallyStream | null = null;
@@ -281,9 +301,16 @@ export class MediaStreamSession {
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private commitAt = 0; // when we asked Scribe to finalise (for STT-RTT timing)
   private segmentHandled = false; // this utterance was answered off its partial (skip committed)
+  private segmentSeq = 0; // monotonic id per committed utterance (stale-transcript guard)
+  private lastPartial = ""; // last STT partial seen (for stuck-utterance recovery)
+  private partialStableMs = 0; // how long the STT partial has been unchanged
   // Idle watchdog state.
   private lastActivityAt = Date.now();
   private idleNudges = 0;
+  // While > now, the caller asked us to wait — the idle watchdog stays silent
+  // (no nudge) until this passes, then the normal silence cadence resumes.
+  private waitGraceUntil = 0;
+  private lastBargeAt = 0; // when the caller last interrupted us (barge-in)
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   // Set once the closing ("Done… I'll text it through") is delivered: the call
   // is hanging up, so ignore any further caller speech (no new turns) — the line
@@ -459,9 +486,8 @@ export class MediaStreamSession {
     const callerNum = from && !from.startsWith("client:") ? from : "";
 
     if (reservationMode) {
-      // Deterministic table-reservation brain — no per-turn LLM needed.
       const reservationSettings = await getReservationSettings(db, restaurant.id);
-      this.resMachine = new ReservationMachine({
+      const resCtx = {
         db,
         restaurantId: restaurant.id,
         restaurantName: restaurant.name,
@@ -476,7 +502,26 @@ export class MediaStreamSession {
         address: restaurant.address,
         phoneDisplay: restaurant.phoneDisplay,
         source: custom.source || undefined,
-      });
+      };
+      // The LLM brain runs when the global flag is "llm" OR this caller is on the
+      // LLM test allowlist (owner test phones) — so real callers can stay on the
+      // proven deterministic brain while the new one is validated on test numbers.
+      if (useLlmBrainForCaller(callerNum || from)) {
+        // Conversational brain: Haiku 4.5 interprets each utterance; the
+        // deterministic engine still controls availability + the DB. The LLM
+        // client is lazy on the key, so a missing key never stops the call from
+        // starting — the interpreter simply degrades to a re-ask.
+        const interpreterLlm = this.deps.createLlm("claude-haiku-4-5");
+        this.resMachine = ConversationalReservationBrain.fromLlm(
+          resCtx,
+          interpreterLlm,
+          (m, meta) => this.deps.log(m, meta ?? {}),
+        );
+        this.deps.log("reservation brain", { brain: "llm", model: "claude-haiku-4-5" });
+      } else {
+        // Deterministic table-reservation brain — no per-turn LLM needed.
+        this.resMachine = new ReservationMachine(resCtx);
+      }
     } else {
       let llm: Llm;
       try {
@@ -540,29 +585,53 @@ export class MediaStreamSession {
       greeting = `Just so you know, this call may be recorded. ${greeting}`;
     }
 
-    // Speak the greeting ourselves (no platform welcome message here).
-    await appendTranscript(db, call.id, {
-      role: "assistant",
-      text: greeting,
-      at: new Date().toISOString(),
-    });
-    await this.speak(greeting);
-    this.bargeArmed = true; // greeting delivered — now a real interruption may cut us off
-    this.lastActivityAt = Date.now();
-    this.startIdleWatch();
+    // Speak the greeting ourselves (no platform welcome message here). A failure here
+    // (DB hiccup on the transcript write, or an ElevenLabs error on the first live
+    // greeting synth) must STILL arm barge-in and the idle watchdog — otherwise the
+    // call would run deaf, with no interruption and no dead-air recovery, for its whole
+    // life (audit 2026-10-07). So the arming is in `finally`.
+    try {
+      await appendTranscript(db, call.id, {
+        role: "assistant",
+        text: greeting,
+        at: new Date().toISOString(),
+      });
+      // Force-cache the greeting (it's long, so the normal cache guard skips it): the
+      // greeting is fixed, so caching it makes every call after this one start instantly
+      // instead of waiting on an ElevenLabs round-trip (start-of-call lag, Kevin 2026-10-07).
+      await this.speak(greeting, { cacheFixed: reservationMode });
+    } catch (err) {
+      this.deps.log("greeting send failed", { error: (err as Error).message });
+    } finally {
+      this.bargeArmed = true; // greeting delivered — now a real interruption may cut us off
+      this.lastActivityAt = Date.now();
+      this.startIdleWatch();
+    }
   }
 
   /** Never sit in dead air: nudge the caller after silence, then end politely.
    * Recovers from a mid-call audio drop or a caller who has gone quiet. */
   private startIdleWatch(): void {
     this.idleTimer = setInterval(() => {
+     try {
       if (this.closed) return this.clearIdleWatch();
       // Busy = active: we're speaking, a turn is being processed, the caller is
       // mid-utterance, OR a live partial transcript is building (they're talking
       // right now). The partial check stops a silence prompt firing the instant
       // the caller has started answering (Kevin: "Take your time" fired after I'd
       // already responded).
-      if (this.speaking || this.awaitingReply || this.inUtterance || (this.scribe?.peekPartial() ?? "").length > 0) {
+      // `speaking` goes false when we finish SENDING frames, but Twilio keeps
+      // playing them out for several more seconds — so also stay "busy" until the
+      // audio has actually finished playing. Without this, a long greeting/prompt
+      // ate into the 9s window and the watchdog nudged ~1s after the words ended
+      // (live call 2026-10-05: greeting + occasion question were each re-asked).
+      // SILENCE SAFETY (Kevin 2026-10-10): silence is the ONLY assistant-initiated
+      // end, and only after GENUINE prolonged inactivity. Suppress any nudge while
+      // ANY sign of life is present — we're speaking or still playing out, a turn is
+      // being processed (a booking write counts), the caller is mid-utterance, a live
+      // partial transcript is building, they asked us to hold, or they just
+      // interrupted us. The clock only advances when the line is truly quiet.
+      if (this.silenceGuardActive()) {
         this.lastActivityAt = Date.now();
         return;
       }
@@ -571,11 +640,12 @@ export class MediaStreamSession {
       // After a booking is confirmed the line stays open for a change/cancel. If
       // the caller has gone quiet they're done — DON'T re-ask "anything else?"
       // (that was the repeated-confirmation complaint). One warm goodbye, hang up,
-      // booking stands.
+      // booking stands. Logged as silence_timeout, never abandonment.
       if (this.resMachine && this.resMachine.debug().state === "POST_CONFIRM") {
         this.clearIdleWatch();
         this.ending = true;
         void (async () => {
+          await this.logSilenceTimeout("post_confirm_quiet");
           await this.sayAndLog("All booked — see you then. Cheers.");
           const tail = Math.max(300, this.lastPlayoutEndAt - Date.now());
           await new Promise((r) => setTimeout(r, tail + 300));
@@ -586,32 +656,75 @@ export class MediaStreamSession {
       }
       if (this.idleNudges < IDLE_MAX_NUDGES) {
         this.idleNudges += 1;
-        // Spec §11: the FIRST recovery is a gentle re-ask of the current
-        // question — never "are you still there?", which reads as impatient.
-        // Only the SECOND, later nudge checks the caller is still on the line.
+        // Cadence: the FIRST recovery is a gentle, CONTEXTUAL re-ask of the current
+        // question — never "are you still there?", which reads as impatient. Only the
+        // SECOND, later check asks whether they're still on the line.
         let line: string;
         if (this.resMachine) {
-          line = this.idleNudges === 1 ? this.resMachine.gentleReprompt() : "Are you still there?";
+          line = this.idleNudges === 1 ? this.resMachine.gentleReprompt() : "Still there?";
         } else {
           line = this.idleNudges === 1 ? "Sorry, are you still there?" : "Still there? What can I get you?";
         }
         void this.sayAndLog(line).catch(() => undefined);
         return;
       }
-      // Two nudges unanswered -> bow out so the line never hangs in silence.
+      // Two gentle checks have gone unanswered. Before ending, HONOUR a multi-step
+      // recovery in progress (name spelling / name confirmation) — never end mid-flow;
+      // give one more gentle cycle instead (Kevin 2026-10-10 silence rule).
+      if (this.resMachine?.midCriticalFlow?.()) {
+        void this.sayAndLog(this.resMachine.gentleReprompt()).catch(() => undefined);
+        return;
+      }
+      // Genuinely prolonged silence through the full cadence, every activity signal
+      // clear → warm close. This is dead-LINE recovery (a line can't hang open
+      // forever), logged separately as silence_timeout — NEVER customer abandonment.
       this.clearIdleWatch();
+      this.ending = true;
       void (async () => {
-        await this.sayAndLog("No worries — call back anytime. Cheers.");
+        await this.logSilenceTimeout("no_response");
+        await this.sayAndLog("I'll let you go for now. Feel free to call us back when you're ready.");
         const tail = Math.max(300, this.lastPlayoutEndAt - Date.now());
         await new Promise((r) => setTimeout(r, tail + 300));
-        await this.finalise(undefined);
+        await this.finalise(this.resMachine?.reservation ? "ORDER_COMPLETED" : undefined);
         try {
           this.ws.close();
         } catch {
           /* noop */
         }
       })().catch(() => undefined);
+     } catch (err) {
+       // A phone line must never drop because the idle watchdog threw — survive it.
+       this.deps.log("idle watchdog error (survived)", { error: (err as Error).message });
+     }
     }, 1000);
+  }
+
+  /** Any sign the caller is still engaged — used to suppress silence nudges and to
+   * gate the silence close. Covers Kevin's pre-end checklist that the voice layer
+   * can observe: voice activity, a building partial transcript, a committed turn /
+   * booking write in flight, our own speech / playout, a hold request, and a very
+   * recent interruption. */
+  private silenceGuardActive(): boolean {
+    return (
+      Boolean(this.speaking) ||
+      this.awaitingReply ||
+      this.inUtterance ||
+      Date.now() < this.lastPlayoutEndAt ||
+      (this.scribe?.peekPartial() ?? "").length > 0 ||
+      Date.now() < this.waitGraceUntil ||
+      Date.now() - this.lastBargeAt < BARGE_SETTLE_MS
+    );
+  }
+
+  /** Record a silence-driven end as its OWN event type (never customer abandonment),
+   * so these are auditable and distinct from a caller who chose to leave. */
+  private async logSilenceTimeout(reason: string): Promise<void> {
+    if (!this.callId) return;
+    try {
+      await recordCallEvent(getDb(), this.callId, "silence_timeout", {
+        reason, hadReservation: Boolean(this.resMachine?.reservation), idleNudges: this.idleNudges,
+      });
+    } catch { /* best-effort */ }
   }
 
   private clearIdleWatch(): void {
@@ -644,6 +757,7 @@ export class MediaStreamSession {
           // opens with a brief apology (Kevin: respect them, never talk over).
           if (this.agent) this.agent.state.afterBarge = true;
           this.resBarge = true;
+          this.lastBargeAt = Date.now(); // recent interruption → never silence-close right after
         }
       }
       return; // don't endpoint our own audio back
@@ -672,23 +786,49 @@ export class MediaStreamSession {
         ? ENDPOINT_HESITATION_MS
         : ENDPOINT_SILENCE_MS;
       if (this.silenceMs >= threshold && !this.awaitingReply && !this.ending) {
-        this.inUtterance = false;
-        this.speechMs = 0;
-        this.silenceMs = 0;
-        this.awaitingReply = true;
-        this.segmentHandled = false;
-        this.commitAt = Date.now();
-        this.lastActivityAt = Date.now(); // caller spoke -> reset the idle watchdog
-        this.idleNudges = 0;
-        // Probe the live partial against the fast path RIGHT NOW (no round-trip).
-        // A clean match answers instantly; a miss does nothing and the accurate
-        // committed transcript (below) drives the turn ~400ms later.
-        const partial = this.scribe?.peekPartial() ?? "";
-        this.scribe?.commit(); // -> committed_transcript -> onCommitted -> onCallerUtterance
-        this.armSttStall();
-        if (partial) this.enqueueTurn(partial, 0, "probe");
+        this.commitUtterance();
+        return;
       }
     }
+
+    // Stuck-in-utterance recovery (runs whether or not the VAD currently hears
+    // voice): if the STT text has stopped changing, commit even though energy is
+    // still present — otherwise line noise / ambience holds the utterance open and
+    // the caller gets dead air (live call 2026-10-05: "Yes" uncommitted ~14s). The
+    // normal trailing-silence path (900ms) still wins for a clean finish, so this
+    // only fires when silence never accumulates.
+    if (this.inUtterance && !this.awaitingReply && !this.ending) {
+      const p = this.scribe?.peekPartial() ?? "";
+      if (p && p === this.lastPartial) {
+        this.partialStableMs += FRAME_MS;
+        if (this.partialStableMs >= PARTIAL_STALL_MS) this.commitUtterance();
+      } else {
+        this.lastPartial = p;
+        this.partialStableMs = 0;
+      }
+    }
+  }
+
+  /** Finalise the current utterance: stop listening, probe the live partial against
+   * the fast path NOW (a clean match answers instantly; a miss does nothing and the
+   * accurate committed transcript drives the turn ~400ms later), and ask Scribe to
+   * commit. Shared by the trailing-silence path and the stuck-utterance recovery. */
+  private commitUtterance(): void {
+    this.inUtterance = false;
+    this.speechMs = 0;
+    this.silenceMs = 0;
+    this.partialStableMs = 0;
+    this.lastPartial = "";
+    this.awaitingReply = true;
+    this.segmentHandled = false;
+    this.segmentSeq++; // a new utterance — any earlier committed transcript is now stale
+    this.commitAt = Date.now();
+    this.lastActivityAt = Date.now(); // caller spoke -> reset the idle watchdog
+    this.idleNudges = 0;
+    const partial = this.scribe?.peekPartial() ?? "";
+    this.scribe?.commit(); // -> committed_transcript -> onCommitted -> onCallerUtterance
+    this.armSttStall();
+    if (partial) this.enqueueTurn(partial, 0, "probe");
   }
 
   /** Keypad digit from Twilio. The robust fallback for a number/phone the STT
@@ -706,7 +846,9 @@ export class MediaStreamSession {
     if (this.dtmfTimer) clearTimeout(this.dtmfTimer);
     // A lone digit (party size) flushes quickly; a longer run (a phone number)
     // coalesces until the caller pauses or presses '#'.
-    this.dtmfTimer = setTimeout(() => this.flushDtmf(), 1500);
+    this.dtmfTimer = setTimeout(() => {
+      try { this.flushDtmf(); } catch { /* never let a keypad flush crash the process */ }
+    }, 1500);
   }
 
   private flushDtmf(): void {
@@ -728,8 +870,16 @@ export class MediaStreamSession {
   private armSttStall(): void {
     if (this.sttStallTimer) clearTimeout(this.sttStallTimer);
     this.sttStallTimer = setTimeout(() => {
+     try {
       this.sttStallTimer = null;
       if (this.closed || this.ending || !this.awaitingReply) return;
+      // NEVER talk over a caller who is still speaking — if they're mid-utterance or
+      // a partial transcript is still building, give them time: wait and re-arm
+      // rather than re-prompting into their speech (Kevin 2026-10-07: no overlapping).
+      if (this.inUtterance || (this.scribe?.peekPartial() ?? "").length > 0) {
+        this.armSttStall();
+        return;
+      }
       this.deps.log("STT stall — re-prompting", { waitedMs: Date.now() - this.commitAt });
       this.segmentHandled = true; // discard the late transcript if it ever arrives
       this.awaitingReply = false;
@@ -738,6 +888,7 @@ export class MediaStreamSession {
         ? this.resMachine.gentleReprompt()
         : "Sorry, I didn't catch that — could you say that again?";
       void this.sayAndLog(line).catch(() => undefined);
+     } catch { /* never let the stall timer crash the process */ }
     }, 6000);
   }
 
@@ -750,25 +901,27 @@ export class MediaStreamSession {
 
   private onCallerUtterance(text: string): void {
     this.clearSttStall();
-    // The committed (accurate) transcript arrived. If we already answered this
-    // utterance off its partial (probe), ignore it — don't answer twice.
-    if (this.segmentHandled) {
-      this.segmentHandled = false;
-      return;
-    }
-    // Nothing to run (empty transcript / call ending) — free the session so a
-    // probe-miss that leaves awaitingReply set can't wedge the line.
-    if (!text.trim() || this.closed || this.ending) {
-      this.awaitingReply = false;
-      return;
-    }
-    // Do NOT clear awaitingReply here: keep it set for the whole full turn so a
-    // second endpoint can't fire during the (silent, filler-off) LLM think and
-    // stack a duplicate/overlapping turn (audit 2026-09-24, the "overlap /
-    // talking over each other" complaint). runTurn's finally clears it when the
-    // reply is delivered; armSttStall is the 6s backstop if it never runs.
+    // The committed (accurate) transcript arrived. Decide whether to run a full turn
+    // ON THE TURN QUEUE, so this decision runs AFTER this segment's probe turn (which
+    // sets segmentHandled on a clean fast-path hit). Doing it inline raced the probe:
+    // if the committed text arrived mid-probe, segmentHandled was still false and we
+    // spoke twice; and a boolean couldn't tell a stale old-segment transcript apart
+    // from the current one (audit 2026-10-07 — the double/stale-speak overlap).
+    const seg = this.segmentSeq; // the utterance this transcript belongs to
     const sttMs = this.commitAt ? Date.now() - this.commitAt : 0;
-    this.enqueueTurn(text.trim(), sttMs, "full");
+    this.turnQueue = this.turnQueue
+      .then(async () => {
+        // A newer utterance has since been committed — this transcript is stale, drop
+        // it (the newer segment drives its own turn).
+        if (seg !== this.segmentSeq) return;
+        // Already answered off the partial (probe hit) — don't answer twice.
+        if (this.segmentHandled) { this.segmentHandled = false; return; }
+        if (!text.trim() || this.closed || this.ending) { this.awaitingReply = false; return; }
+        // awaitingReply stays set across the full turn so a second endpoint can't stack
+        // a duplicate during the think; runTurn's finally clears it.
+        await this.runTurn(text.trim(), sttMs, "full");
+      })
+      .catch(() => undefined);
   }
 
   private enqueueTurn(text: string, sttMs: number, mode: "probe" | "full"): void {
@@ -986,6 +1139,13 @@ export class MediaStreamSession {
         turn = { ...turn, say: `Sorry about that — ${turn.say}` };
       }
       const speakText = (turn.say || "").trim();
+      // The caller asked us to wait ("hold on a sec"): open a grace window so the
+      // idle watchdog doesn't nag them, and reset the nudge count so the first
+      // prompt after the wait is the gentle re-ask, never "are you still there?".
+      if (turn.kind === "hold") {
+        this.waitGraceUntil = Date.now() + WAIT_GRACE_MS;
+        this.idleNudges = 0;
+      }
       const turnMs = Date.now() - turnStarted;
       const stateAfter = this.resMachine.debug();
       if (this.callId) {
@@ -1050,7 +1210,7 @@ export class MediaStreamSession {
    * Speak text in Sally's voice; resolves when playback audio is fully sent.
    * Returns time-to-first-audio-chunk in ms (null if no audio was produced).
    */
-  private async speak(rawText: string): Promise<number | null> {
+  private async speak(rawText: string, opts: { cacheFixed?: boolean } = {}): Promise<number | null> {
     const text = collapseRepeatedSentences(stripPlanNarration(rawText));
     this.stopSpeaking();
     this.bargeMs = 0;
@@ -1071,7 +1231,13 @@ export class MediaStreamSession {
       // a barge-in over a cached line for its full duration (audit 2026-09-24,
       // the "not giving time to speak / overlap" complaint). 40ms granularity.
       for (let waited = 0; waited < playoutMs; waited += 40) {
-        if (this.speaking !== CACHED_PLAYBACK) return 0; // barged-in / stopped
+        if (this.speaking !== CACHED_PLAYBACK) {
+          // Barged-in: the remaining audio was flushed (sendClear), so correct the
+          // playout-end to ~now — otherwise the idle watchdog thinks we're still
+          // "speaking" and the end-of-call tail over-waits (audit 2026-10-07).
+          this.lastPlayoutEndAt = Date.now();
+          return 0;
+        }
         await new Promise((r) => setTimeout(r, Math.min(40, playoutMs - waited)));
       }
       if (this.speaking === CACHED_PLAYBACK) this.speaking = null;
@@ -1099,8 +1265,14 @@ export class MediaStreamSession {
     // The end-of-call hangup waits for this so the goodbye isn't cut off.
     const totalMs = Math.ceil(chunks.reduce((n, c) => n + c.length, 0) / 8);
     this.lastPlayoutEndAt = start + (ttfb ?? 0) + totalMs;
-    // Cache invariant phrases so the next identical one is instant.
-    if (chunks.length > 0) maybeCacheSpoken(activeVoiceId(), text, Buffer.concat(chunks));
+    // Cache invariant phrases so the next identical one is instant. A KNOWN-FIXED
+    // line (the greeting) is force-cached even though it's long, so call #2 onward
+    // plays it instantly — no per-call ElevenLabs round-trip (the start-of-call lag).
+    if (chunks.length > 0) {
+      const buf = Buffer.concat(chunks);
+      if (opts.cacheFixed) forceCacheSpoken(activeVoiceId(), text, buf);
+      else maybeCacheSpoken(activeVoiceId(), text, buf);
+    }
     return ttfb;
   }
 
@@ -1156,12 +1328,17 @@ export class MediaStreamSession {
   }
 
   private async onClose(): Promise<void> {
-    this.abort?.abort();
-    this.stopSpeaking();
-    this.warmTts?.abort();
+    // Guard each teardown step individually: a throw in any of them (e.g. a double
+    // close where abort()/scribe.close() throws when already closed) must NOT skip
+    // finalise(), or the call row is left un-ended with no outcome/owner alert and a
+    // timer leaks (audit 2026-10-07).
+    try { this.abort?.abort(); } catch { /* already aborted */ }
+    try { this.stopSpeaking(); } catch { /* nothing playing */ }
+    try { this.warmTts?.abort(); } catch { /* already dead */ }
     this.warmTts = null;
-    this.scribe?.close();
-    if (this.endTimer) clearTimeout(this.endTimer);
+    try { this.scribe?.close(); } catch { /* already closed */ }
+    if (this.endTimer) { clearTimeout(this.endTimer); this.endTimer = null; }
+    if (this.dtmfTimer) { clearTimeout(this.dtmfTimer); this.dtmfTimer = null; } // don't leak the DTMF timer
     await this.finalise();
   }
 }

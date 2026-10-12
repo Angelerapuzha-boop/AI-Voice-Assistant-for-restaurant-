@@ -268,6 +268,12 @@ export interface Reservation {
   accessibility: boolean;
   occasion: string;
   seatingPref: "" | "indoor" | "outdoor";
+  /** Whether the customer's name was actually captured. 'unresolved' means the
+   * booking is held under the caller's phone number because the line's STT made
+   * the spoken name impossible to catch even after spelling — the name was never
+   * invented or guessed, and the row is flagged for a human to confirm. */
+  nameStatus: "provided" | "unresolved";
+  needsStaffAttention: boolean;
   source: string;
   callId: string | null;
   idempotencyKey: string | null;
